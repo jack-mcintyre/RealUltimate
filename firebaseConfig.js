@@ -1,9 +1,7 @@
-import { initializeApp } from "firebase/app";
-// Import both 'getAuth' (for web) and 'initializeAuth' (for phone)
-import { initializeAuth, getAuth, getReactNativePersistence } from 'firebase/auth';
 import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
+import { initializeApp } from "firebase/app";
+import { getAuth, getReactNativePersistence, initializeAuth } from 'firebase/auth';
 import { getDatabase } from "firebase/database";
-// We use this to detect if we are on a phone or computer
 import { Platform } from 'react-native';
 
 // Your web app's Firebase configuration
@@ -22,18 +20,11 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 
-// Initialize Auth conditionally
-let auth;
-
-if (Platform.OS === 'web') {
-  // If we are on the web (computer), use standard persistence
-  auth = getAuth(app);
-} else {
-  // If we are on a phone (Android/iOS), use AsyncStorage
-  auth = initializeAuth(app, {
-    persistence: getReactNativePersistence(ReactNativeAsyncStorage)
-  });
-}
+const auth = Platform.OS === 'web'
+  ? getAuth(app)
+  : initializeAuth(app, {
+      persistence: getReactNativePersistence(ReactNativeAsyncStorage)
+    });
 
 const db = getDatabase(app);
 
