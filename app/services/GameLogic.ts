@@ -2,11 +2,23 @@ import { GameEvent, GameState } from './types';
 
 // Pure logic for game state transitions
 export const GameLogic = {
+    // Helper to init stats if they don't exist
+    initPlayerStats: (state: GameState, playerId: string) => {
+        if (!state.playerStats[playerId]) {
+            state.playerStats[playerId] = { goals: 0, assists: 0, blocks: 0, turns: 0 };
+        }
+    },
+
     applyEvent: (currentState: GameState, event: GameEvent): GameState => {
-        const newState = { ...currentState };
+        // Deep copy state to ensure immutability
+        const newState: GameState = JSON.parse(JSON.stringify(currentState));
 
         // Always add to history
         newState.history = [...newState.history, event];
+
+        // Ensure players have stat objects initialized
+        if (event.playerId) GameLogic.initPlayerStats(newState, event.playerId);
+        if (event.assistantId) GameLogic.initPlayerStats(newState, event.assistantId);
 
         switch (event.type) {
             case 'G': // Goal
@@ -15,35 +27,43 @@ export const GameLogic = {
                 } else if (newState.possession === newState.team2Id) {
                     newState.score2 += 1;
                 }
-                // Possession changes after a goal (pull) or end of point?
-                // Usually, the scoring team pulls, so possession effectively neutral untill pull?
-                // For simplicity, let's just flip possession implies the other team will receive.
+
+                // Update Stats
+                if (event.playerId) newState.playerStats[event.playerId].goals += 1;
+                if (event.assistantId) newState.playerStats[event.assistantId].assists += 1;
+
+                // Possession flips for pull
                 newState.possession = newState.possession === newState.team1Id ? newState.team2Id : newState.team1Id;
                 break;
 
             case 'T': // Throwaway (Turnover)
-            case 'D': // Defense Block (Turnover)
             case 'Drop':
+                // Update Stats
+                if (event.playerId) newState.playerStats[event.playerId].turns += 1;
+
                 // Possession flips
                 newState.possession = newState.possession === newState.team1Id ? newState.team2Id : newState.team1Id;
                 break;
 
-            case 'Callahan':
-                // Defense catches goal.
-                // If team1 has possession (offense) and gets Callahan'd, team2 scores.
+            case 'D': // Defense Block
+                if (event.playerId) newState.playerStats[event.playerId].blocks += 1;
+
+                newState.possession = newState.possession === newState.team1Id ? newState.team2Id : newState.team1Id;
+                break;
+
+            case 'Callahan': // Goal for defense
                 if (newState.possession === newState.team1Id) {
                     newState.score2 += 1; // Team 2 scores
                 } else {
                     newState.score1 += 1; // Team 1 scores
                 }
-                // Possession stays with scoring team? No, they pull. 
-                // So possession effectively flips to receiving team eventually.
-                // Let's standardise: Possession variable represents "Who has the disc OR who is about to receive".
-                // After a goal, the scoring team pulls. The receiving team will get the disc.
-                // So possession should point to the receiving team?
-                // Let's say Possession = "Team with Disc". 
-                // After Goal: Possession = null (dead ball).
-                // But for MVP simplicity, let's just flip it to the other team who will receive.
+
+                // Callahan implies a block AND a goal by the same person
+                if (event.playerId) {
+                    newState.playerStats[event.playerId].blocks += 1;
+                    newState.playerStats[event.playerId].goals += 1;
+                }
+
                 newState.possession = newState.possession === newState.team1Id ? newState.team2Id : newState.team1Id;
                 break;
 
@@ -57,10 +77,17 @@ export const GameLogic = {
 
     // Rebuild state from history (for Undo)
     reconfgureStateFromHistory: (initialState: GameState, history: GameEvent[]): GameState => {
-        let state: GameState = { ...initialState, history: [] }; // Start fresh
+        let state: GameState = JSON.parse(JSON.stringify({ ...initialState, history: [] })); // Start fresh
         for (const event of history) {
             state = GameLogic.applyEvent(state, event);
         }
         return state;
+    },
+
+    // Set the initial line for a point
+    startPoint: (currentState: GameState, activePlayerIds: string[]): GameState => {
+        const newState = { ...currentState };
+        newState.currentLine = activePlayerIds;
+        return newState;
     }
 };

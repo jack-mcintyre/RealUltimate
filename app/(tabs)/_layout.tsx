@@ -20,12 +20,13 @@ export default function TabLayout() {
                         <Ionicons name={focused ? 'home-sharp' : 'home-outline'} color={color} size={24} />
                     )
                 }} />
+
             <Tabs.Screen
-                name="about"
+                name="roster"
                 options={{
-                    title: 'About',
+                    title: 'Roster',
                     tabBarIcon: ({ color, focused }) => (
-                        <Ionicons name={focused ? 'information-circle' : 'information-circle-outline'} color={color} size={24} />
+                        <Ionicons name={focused ? 'people' : 'people-outline'} color={color} size={24} />
                     )
                 }} />
             <Tabs.Screen
@@ -34,6 +35,22 @@ export default function TabLayout() {
                     title: 'Backend Test',
                     tabBarIcon: ({ color, focused }) => (
                         <Ionicons name={focused ? 'code-slash' : 'code-slash-outline'} color={color} size={24} />
+                    )
+                }} />
+            <Tabs.Screen
+                name="live-feed"
+                options={{
+                    title: 'Live Feed',
+                    tabBarIcon: ({ color, focused }) => (
+                        <Ionicons name={focused ? 'radio' : 'radio-outline'} color={color} size={24} />
+                    )
+                }} />
+            <Tabs.Screen
+                name="about"
+                options={{
+                    title: 'About',
+                    tabBarIcon: ({ color, focused }) => (
+                        <Ionicons name={focused ? 'information-circle' : 'information-circle-outline'} color={color} size={24} />
                     )
                 }} />
         </Tabs>

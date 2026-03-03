@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Button, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { auth } from '../../firebaseConfig';
 import { useGame } from '../hooks/useGame';
 import { TeamService } from '../services/TeamService';
 import { Team } from '../services/types';
@@ -8,14 +9,20 @@ export default function TestBackend() {
     const [teamName, setTeamName] = useState('Test Team');
     const [team, setTeam] = useState<Team | null>(null);
     const [playerName, setPlayerName] = useState('');
+    const [selectedPlayer, setSelectedPlayer] = useState<string | null>(null);
 
     const { gameState, recordEvent, undo, canUndo, startGame } = useGame(team ? 'test-game' : undefined);
 
     // Auto-create/join a test team on load or manually
     const handleCreateTeam = async () => {
+        const currentUser = auth.currentUser;
+        if (!currentUser) {
+            alert("You must be logged in to create a team.");
+            return;
+        }
+
         try {
-            const coachId = 'test-coach-id'; // Simulate auth
-            const teamId = await TeamService.createTeam(teamName, coachId);
+            const teamId = await TeamService.createTeam(teamName, currentUser.uid);
             console.log("Team Created:", teamId);
 
             // Subscribe to updates
@@ -76,19 +83,42 @@ export default function TestBackend() {
                             <Text style={styles.score}>Score: {gameState.score1} - {gameState.score2}</Text>
                             <Text>Possession: {gameState.possession === team.id ? 'Us' : 'Them'}</Text>
 
+                            <Text style={styles.mt}>Select Player for Event:</Text>
                             <View style={styles.row}>
-                                <Button title="Goal" onPress={() => recordEvent('G')} />
-                                <Button title="Throwaway" onPress={() => recordEvent('T')} />
-                                <Button title="Ex. D-Block" onPress={() => recordEvent('D')} />
+                                {team.players && Object.values(team.players).map(p => (
+                                    <View key={p.id} style={{ margin: 2, borderWidth: selectedPlayer === p.id ? 2 : 1, borderColor: selectedPlayer === p.id ? 'blue' : 'gray', padding: 5 }}>
+                                        <Button
+                                            title={p.name}
+                                            onPress={() => setSelectedPlayer(p.id)}
+                                            color={selectedPlayer === p.id ? 'blue' : 'gray'}
+                                        />
+                                    </View>
+                                ))}
+                            </View>
+
+                            <View style={styles.row}>
+                                <Button title="Goal" onPress={() => recordEvent('G', { playerId: selectedPlayer })} disabled={!selectedPlayer} />
+                                <Button title="Throwaway" onPress={() => recordEvent('T', { playerId: selectedPlayer })} disabled={!selectedPlayer} />
+                                <Button title="Ex. D-Block" onPress={() => recordEvent('D', { playerId: selectedPlayer })} disabled={!selectedPlayer} />
+                            </View>
+
+                            <View style={styles.section}>
+                                <Text style={styles.subHeader}>Player Stats</Text>
+                                {Object.entries(gameState.playerStats).map(([pId, stats]) => {
+                                    const pName = team.players?.[pId]?.name || pId;
+                                    return (
+                                        <Text key={pId}>{pName} - G: {stats.goals}, A: {stats.assists}, D: {stats.blocks}, T: {stats.turns}</Text>
+                                    );
+                                })}
                             </View>
 
                             <View style={styles.mt}>
                                 <Button title="Undo" onPress={undo} disabled={!canUndo} color="red" />
                             </View>
 
-                            <Text style={styles.mt}>History ({gameState.history.length} events):</Text>
-                            {gameState.history.slice(-5).map((e, i) => (
-                                <Text key={i}>{e.type} @ {new Date(e.timestamp).toLocaleTimeString()}</Text>
+                            <Text style={styles.mt}>History ({(gameState.history || []).length} events):</Text>
+                            {(gameState.history || []).slice(-5).map((e, i) => (
+                                <Text key={i}>{e.type} by {team.players?.[e.playerId || '']?.name || 'Unknown'} @ {new Date(e.timestamp).toLocaleTimeString()}</Text>
                             ))}
                         </>
                     )}

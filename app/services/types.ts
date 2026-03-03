@@ -3,7 +3,13 @@ export interface Player {
   name: string;
   number?: string;
   teamId: string;
-  // Stats could be aggregated here or calculated from events
+}
+
+export interface PlayerStats {
+  goals: number;
+  assists: number;
+  blocks: number; // D's
+  turns: number; // Throwaways + Drops
 }
 
 export interface Team {
@@ -14,16 +20,16 @@ export interface Team {
   players: Record<string, Player>; // Map player ID to Player for easy access
 }
 
-export type EventType = 
+export type EventType =
   | 'G' // Goal
   | 'T' // Throwaway
   | 'D' // Defense Block
-  | 'Callahan' 
-  | 'Drop' 
+  | 'Callahan'
+  | 'Drop'
   | 'Catch'
-  | 'Pull' 
+  | 'Pull'
   | 'EndOfFirstQuarter'
-  | 'Halftime' 
+  | 'Halftime'
   | 'EndOfThirdQuarter'
   | 'GameOver'
   | 'Timeout'
@@ -35,7 +41,8 @@ export interface GameEvent {
   gameId: string;
   type: EventType;
   timestamp: number;
-  playerId?: string; // Player who committed the action
+  playerId?: string; // Player who committed the action (scored, threw away, etc)
+  assistantId?: string; // Player who assisted (for goals)
   opponent?: string; // If applicable (e.g. who got D'd?) - maybe not needed for MVP
   subIn?: string; // Player ID entering
   subOut?: string; // Player ID leaving
@@ -54,6 +61,7 @@ export interface GameState {
   history: GameEvent[]; // Stack of events
   isGameActive: boolean;
   gameTime?: number; // In seconds
+  playerStats: Record<string, PlayerStats>; // Map playerId to their stats
 }
 
 export const INITIAL_GAME_STATE: GameState = {
@@ -66,4 +74,5 @@ export const INITIAL_GAME_STATE: GameState = {
   currentLine: [],
   history: [],
   isGameActive: false,
+  playerStats: {},
 };
