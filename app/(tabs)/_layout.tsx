@@ -30,11 +30,11 @@ export default function TabLayout() {
                     )
                 }} />
             <Tabs.Screen
-                name="test-backend"
+                name="recorder"
                 options={{
-                    title: 'Backend Test',
+                    title: 'Record Game',
                     tabBarIcon: ({ color, focused }) => (
-                        <Ionicons name={focused ? 'code-slash' : 'code-slash-outline'} color={color} size={24} />
+                        <Ionicons name={focused ? 'clipboard' : 'clipboard-outline'} color={color} size={24} />
                     )
                 }} />
             <Tabs.Screen
