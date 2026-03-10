@@ -1,11 +1,26 @@
 import Ionicons from '@expo/vector-icons/Ionicons'
-import { Tabs } from 'expo-router'
+import { Tabs, router } from 'expo-router'
+import { useEffect } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from '../../firebaseConfig';
 
 export default function TabLayout() {
+    
+    // Auth Guard
+    useEffect(() => {
+        const unsubscribe = onAuthStateChanged(auth, (user) => {
+            if (!user) {
+                // Not logged in? Get out of the tabs!
+                router.replace('/');
+            }
+        });
+        return unsubscribe;
+    }, []);
+
     return (
         <Tabs
             screenOptions={{
-                tabBarActiveTintColor: 'ffd33d',
+                tabBarActiveTintColor: '#ffd33d',
                 headerStyle: { backgroundColor: '#25292e' },
                 headerShadowVisible: false,
                 headerTintColor: '#fff',
@@ -13,44 +28,19 @@ export default function TabLayout() {
             }}
         >
             <Tabs.Screen
-                name="index"
+                name="teams"
                 options={{
-                    title: 'Home',
+                    title: 'Teams',
                     tabBarIcon: ({ color, focused }) => (
-                        <Ionicons name={focused ? 'home-sharp' : 'home-outline'} color={color} size={24} />
-                    )
-                }} />
-
-            <Tabs.Screen
-                name="roster"
-                options={{
-                    title: 'Roster',
-                    tabBarIcon: ({ color, focused }) => (
-                        <Ionicons name={focused ? 'people' : 'people-outline'} color={color} size={24} />
+                        <Ionicons name={focused ? 'shield' : 'shield-outline'} color={color} size={24} />
                     )
                 }} />
             <Tabs.Screen
-                name="recorder"
+                name="profile"
                 options={{
-                    title: 'Record Game',
+                    title: 'Profile',
                     tabBarIcon: ({ color, focused }) => (
-                        <Ionicons name={focused ? 'clipboard' : 'clipboard-outline'} color={color} size={24} />
-                    )
-                }} />
-            <Tabs.Screen
-                name="live-feed"
-                options={{
-                    title: 'Live Feed',
-                    tabBarIcon: ({ color, focused }) => (
-                        <Ionicons name={focused ? 'radio' : 'radio-outline'} color={color} size={24} />
-                    )
-                }} />
-            <Tabs.Screen
-                name="about"
-                options={{
-                    title: 'About',
-                    tabBarIcon: ({ color, focused }) => (
-                        <Ionicons name={focused ? 'information-circle' : 'information-circle-outline'} color={color} size={24} />
+                        <Ionicons name={focused ? 'person' : 'person-outline'} color={color} size={24} />
                     )
                 }} />
         </Tabs>

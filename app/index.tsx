@@ -1,20 +1,21 @@
+import { router } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-// FIX: Ensure this path is correct (../firebaseConfig if file is in app/ folder)
-import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword, signOut, User } from 'firebase/auth';
-import { auth } from '../../firebaseConfig';
+import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword, User } from 'firebase/auth';
+import { auth } from '../firebaseConfig';
 
-export default function App() {
+export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [user, setUser] = useState<User | null>(null);
-  // NEW: State to show errors on screen
   const [errorMsg, setErrorMsg] = useState('');
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
+      if (currentUser) {
+        // Logged in? Warp straight to the Teams tab!
+        router.replace('/(tabs)/teams');
+      }
     });
     return unsubscribe;
   }, []);
@@ -28,11 +29,8 @@ export default function App() {
     setLoading(true);
     try {
       await createUserWithEmailAndPassword(auth, email, password);
-      // Success is handled by onAuthStateChanged
     } catch (error: any) { 
-      // SHOW THE ERROR ON SCREEN
       setErrorMsg(error.message);
-      console.error(error); // Also try to log it
     } finally {
       setLoading(false);
     }
@@ -49,23 +47,6 @@ export default function App() {
       setLoading(false);
     }
   };
-
-  const handleLogout = async () => {
-    await signOut(auth);
-    setUser(null);
-  };
-
-  if (user) {
-    return (
-      <View style={styles.container}>
-        <Text style={styles.title}>Welcome Coach!</Text>
-        <Text style={styles.subtitle}>{user.email}</Text>
-        <TouchableOpacity style={[styles.button, styles.logoutButton]} onPress={handleLogout}>
-          <Text style={styles.registerText}>Log Out</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
 
   return (
     <KeyboardAvoidingView 

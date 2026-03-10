@@ -16,52 +16,50 @@ export interface Team {
   id: string;
   coachId: string;
   name: string;
-  accessCode: string;
+  accessCode: string; // Coach Code
+  spectatorCode?: string; // Spectator Code (Optional for backward compatibility)
   players: Record<string, Player>; // Map player ID to Player for easy access
+  role?: 'coach' | 'spectator'; // Client-side only - indicates user's relation
+  activeGameId?: string; // Tethers a running game session to this team
 }
 
 export type EventType =
-  | 'G' // Goal
-  | 'T' // Throwaway
-  | 'D' // Defense Block
-  | 'Callahan'
-  | 'Drop'
-  | 'Catch'
-  | 'Pull'
-  | 'EndOfFirstQuarter'
-  | 'Halftime'
-  | 'EndOfThirdQuarter'
-  | 'GameOver'
-  | 'Timeout'
-  | 'Injury'
-  | 'Undo'; // Special event type for undo tracking? Or handle separately
+  | 'Goal' // Represents an actual point scored
+  | 'G' // (Legacy short form for Goal, usually map to above in UI)
+  | 'Throwaway' // Unforced offensive error
+  | 'T' // (Legacy)
+  | 'Drop' // Receiver dropped the disc
+  | 'D-Block' // Defensive block on the disc
+  | 'D' // (Legacy)
+  | 'Opponent Score' // When the other team scores (so we don't need a specific player)
+  | 'Opponent Turnover' // When the other team turns it over (so we don't need a specific player)
+  | 'Halftime' // Context event to flip possession and track periods
+  | 'End Halftime'
+  | 'Timeout';
 
 export interface GameEvent {
-  id: string;
+  id: string; // Unique ID for event
   gameId: string;
   type: EventType;
   timestamp: number;
-  playerId?: string; // Player who committed the action (scored, threw away, etc)
-  assistantId?: string; // Player who assisted (for goals)
-  opponent?: string; // If applicable (e.g. who got D'd?) - maybe not needed for MVP
-  subIn?: string; // Player ID entering
-  subOut?: string; // Player ID leaving
-  teamId: string; // Which team the event belongs to
-  details?: string; // Extra info
+  teamId?: string;
+  playerId?: string;
 }
 
 export interface GameState {
   gameId: string;
-  team1Id: string;
-  team2Id: string; // Or "Opponent Name" if not tracking both sides fully
+  team1Id: string; // US
+  team2Id: string; // THEM
+  team2Name?: string; // GUEST TEAM TEMP NAME
   score1: number;
   score2: number;
-  possession: string; // teamId of team with disc
-  currentLine: string[]; // Array of player IDs on field
-  history: GameEvent[]; // Stack of events
+  possession: string; // which team has the disc
+  firstHalfPossession: string; // Team ID
+  gameTarget: number;
+  isHalftime: boolean;
   isGameActive: boolean;
-  gameTime?: number; // In seconds
-  playerStats: Record<string, PlayerStats>; // Map playerId to their stats
+  playerStats: Record<string, PlayerStats>;
+  history?: GameEvent[];
 }
 
 export const INITIAL_GAME_STATE: GameState = {
@@ -71,8 +69,10 @@ export const INITIAL_GAME_STATE: GameState = {
   score1: 0,
   score2: 0,
   possession: '',
-  currentLine: [],
-  history: [],
+  firstHalfPossession: '',
+  gameTarget: 15,
+  isHalftime: false,
   isGameActive: false,
   playerStats: {},
+  history: []
 };

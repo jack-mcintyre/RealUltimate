@@ -23,20 +23,25 @@ export const TeamService = {
             if (!teamId) throw new Error("Failed to generate team ID");
 
             const accessCode = generateAccessCode();
+            const spectatorCode = generateAccessCode(); // Brand new Spectator code
 
             const newTeam: Team = {
                 id: teamId,
                 coachId,
                 name: teamName,
                 accessCode,
+                spectatorCode,
                 players: {},
             };
 
             await set(newTeamRef, newTeam);
 
-            // Also map access code to team ID for easy lookup later (optional optimization)
-            const accessCodeRef = ref(db, `accessCodes/${accessCode}`);
-            await set(accessCodeRef, teamId);
+            // Map access code -> { teamId, role }
+            await set(ref(db, `accessCodes/${accessCode}`), { teamId, role: 'coach' });
+            await set(ref(db, `accessCodes/${spectatorCode}`), { teamId, role: 'spectator' });
+
+            // Automatically add to user's coached list
+            await set(ref(db, `users/${coachId}/coached_teams/${teamId}`), true);
 
             return teamId;
         } catch (error) {
@@ -45,12 +50,18 @@ export const TeamService = {
         }
     },
 
-    joinTeamByCode: async (accessCode: string): Promise<string | null> => {
-        // This would require querying teams by accessCode or using the mapping above
+    joinTeamByCode: async (accessCode: string, userId: string): Promise<{ teamId: string, role: string } | null> => {
         const accessCodeRef = ref(db, `accessCodes/${accessCode}`);
         const snapshot = await get(accessCodeRef);
         if (snapshot.exists()) {
-            return snapshot.val();
+            const data = snapshot.val();
+            // data is { teamId, role }
+            
+            // Save relation to user profile!
+            const listType = data.role === 'coach' ? 'coached_teams' : 'spectated_teams';
+            await set(ref(db, `users/${userId}/${listType}/${data.teamId}`), true);
+
+            return data;
         }
         return null;
     },
@@ -85,5 +96,79 @@ export const TeamService = {
             const data = snapshot.val();
             callback(data);
         });
+    },
+
+    // New dual-fetcher: fetches coached AND spectated teams concurrently
+    getTeamsForUser: (userId: string, callback: (coached: Team[], spectated: Team[]) => void) => {
+        let coachedIds: string[] = [];
+        let spectatedIds: string[] = [];
+        let allTeamsData: any = {};
+
+        // Helper to reconstruct the two lists
+        const emitMappedTeams = () => {
+            const finalCoached: Team[] = [];
+            const finalSpectated: Team[] = [];
+
+            coachedIds.forEach(id => {
+                if (allTeamsData[id]) {
+                    finalCoached.push({ ...allTeamsData[id], role: 'coach' });
+                }
+            });
+
+            spectatedIds.forEach(id => {
+                if (allTeamsData[id]) {
+                    finalSpectated.push({ ...allTeamsData[id], role: 'spectator' });
+                }
+            });
+
+            callback(finalCoached, finalSpectated);
+        };
+
+        // 1. Fetch user's coached list mapping
+        const unsubCoached = onValue(ref(db, `users/${userId}/coached_teams`), (snap) => {
+            coachedIds = snap.exists() ? Object.keys(snap.val()) : [];
+            emitMappedTeams();
+        });
+
+        // 2. Fetch user's spectated list mapping
+        const unsubSpectated = onValue(ref(db, `users/${userId}/spectated_teams`), (snap) => {
+            spectatedIds = snap.exists() ? Object.keys(snap.val()) : [];
+            emitMappedTeams();
+        });
+
+        // 3. Keep a global watcher on all `teams` to hydrate the metadata quickly
+        // (In a massive production app this doesn't scale well, but for this MVP it works fine)
+        const teamsRef = ref(db, 'teams');
+        const unsubTeams = onValue(teamsRef, (snapshot) => {
+            allTeamsData = snapshot.val() || {};
+            emitMappedTeams();
+        });
+
+        return () => {
+            unsubCoached();
+            unsubSpectated();
+            unsubTeams();
+        }; // Return combined listeners for cleanup
+    },
+
+    setActiveGame: async (teamId: string, gameId: string | null): Promise<void> => {
+        try {
+            await set(ref(db, `teams/${teamId}/activeGameId`), gameId);
+        } catch (error) {
+            console.error("Error setting active game:", error);
+            throw error;
+        }
+    },
+
+    deleteTeam: async (teamId: string, coachId: string): Promise<void> => {
+        try {
+            // Delete from global teams node
+            await set(ref(db, `teams/${teamId}`), null);
+            // Delete from coach's coached_teams list
+            await set(ref(db, `users/${coachId}/coached_teams/${teamId}`), null);
+        } catch (error) {
+            console.error("Error deleting team:", error);
+            throw error;
+        }
     }
 };

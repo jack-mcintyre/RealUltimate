@@ -2,6 +2,7 @@ import { onValue, push, ref, set, update } from 'firebase/database';
 import { useCallback, useEffect, useState } from 'react';
 import { db } from '../../firebaseConfig';
 import { GameLogic } from '../services/GameLogic';
+import { TeamService } from '../services/TeamService';
 import { EventType, GameEvent, GameState, INITIAL_GAME_STATE } from '../services/types';
 
 export const useGame = (gameId?: string) => {
@@ -73,7 +74,7 @@ export const useGame = (gameId?: string) => {
         }
     }, [undoStack]);
 
-    const startGame = async (team1Id: string, team2Id: string) => {
+    const startGame = async (team1Id: string, team2Id: string, team2Name: string, gameTarget: number, initialPossession: string) => {
         const newGameRef = push(ref(db, 'games'));
         const newGameId = newGameRef.key;
 
@@ -84,13 +85,37 @@ export const useGame = (gameId?: string) => {
             gameId: newGameId,
             team1Id,
             team2Id,
-            possession: team1Id, // Default start
+            team2Name,
+            possession: initialPossession,
+            firstHalfPossession: initialPossession,
+            gameTarget,
             isGameActive: true
         };
 
         await set(newGameRef, initialState);
         setGameState(initialState);
+        
+        // Mark teams as active. 
+        // We only set this for the main team because Opponent teams might be completely temporary Guest names
+        TeamService.setActiveGame(team1Id, newGameId);
+        if (team2Id) {
+            TeamService.setActiveGame(team2Id, newGameId);
+        }
+
         return newGameId;
+    };
+
+    const endGame = async (gameId: string) => {
+        const gameRef = ref(db, `games/${gameId}`);
+        await update(gameRef, { isGameActive: false });
+        
+        // Re-read local state to turn off activeGameId hooks
+        if (gameState.team1Id) {
+            TeamService.setActiveGame(gameState.team1Id, null);
+        }
+        if (gameState.team2Id) {
+            TeamService.setActiveGame(gameState.team2Id, null);
+        }
     };
 
     return {
@@ -98,6 +123,7 @@ export const useGame = (gameId?: string) => {
         recordEvent,
         undo,
         canUndo: undoStack.length > 0,
-        startGame
+        startGame,
+        endGame
     };
 };
