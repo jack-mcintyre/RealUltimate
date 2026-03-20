@@ -1,0 +1,65 @@
+Right now creating a team gives you a code,
+but it should be when two teams join a game
+Need to add actual GAME logic.
+
+Seeing past teams you created.
+
+Keeping game information for a week or something
+after the game happened then delete maybe. Longer
+
+Add names for teams, SEARCH BAR in RECORDER screen
+
+Search for two teams as recorder or use codes, select two teams, then start game
+
+Logging in before seeing anything else
+
+see past games for teams
+
+just have one team recorded, other team is guest,
+can change guest team name
+
+login > teams > click on team > record game for that team 
+only see team screen then record
+
+Join a team as a spectator
+Choose to spectate or coach
+Current games button when looking in team
+
+be able to see requests to join team as coach
+
+profile page, role on team
+
+Callahan on our team dont select player, other team do
+actions change possession
+
+Game start screen, who starts possession, point end
+13 or 15 point goal
+
+Halftime button, auto at 7/8 points
+whoever started with possession, other team has it after Halftime
+
+timestamp, spectator markers 
+
+in list of teams see teams you are coaching then 
+teams you are spectating
+
+coach code and spectator code
+
+go back to teams screen
+
+enhanced player stat tracking, 
+player pages w/previous games, overall stats, etc
+enhanced game/season tracking
+immediate match report for coaches, and Spectators
+maybe player accounts with stats
+animation with frisbee flying across screen
+expanded profile, maybe friends? messaging?
+seasons?
+Search for teams? Spectate without code?
+
+recent games on teams screen
+passing, assists?
+
+Callahan switch pos?
+
+If ending game before score reached, prompt

@@ -1,8 +1,11 @@
+import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword, User } from 'firebase/auth';
+import React, { useEffect, useState, useRef } from 'react';
+import { ActivityIndicator, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View, Animated, Easing } from 'react-native';
+import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../firebaseConfig';
+import { getTypography, Layout } from './theme/DesignSystem';
+import { useTheme, ThemeColors } from './theme/ThemeContext';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
@@ -10,10 +13,37 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
+  // Animation Values
+  const slideAnim = useRef(new Animated.Value(300)).current;
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const spinAnim = useRef(new Animated.Value(0)).current;
+
+  const { colors } = useTheme();
+  const styles = getStyles(colors);
+
   useEffect(() => {
+    // Trigger smooth slide-up
+    Animated.parallel([
+        Animated.timing(slideAnim, {
+            toValue: 0,
+            duration: 800,
+            useNativeDriver: true,
+        }),
+        Animated.timing(fadeAnim, {
+            toValue: 1,
+            duration: 1000,
+            useNativeDriver: true,
+        }),
+        Animated.timing(spinAnim, {
+            toValue: 1,
+            duration: 1500,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+        })
+    ]).start();
+
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       if (currentUser) {
-        // Logged in? Warp straight to the Teams tab!
         router.replace('/(tabs)/teams');
       }
     });
@@ -21,7 +51,7 @@ export default function LoginScreen() {
   }, []);
 
   const handleRegister = async () => {
-    setErrorMsg(""); // Clear old errors
+    setErrorMsg("");
     if (password.length < 6) {
       setErrorMsg("Password must be at least 6 characters.");
       return;
@@ -48,79 +78,90 @@ export default function LoginScreen() {
     }
   };
 
+  const spin = spinAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['-180deg', '0deg']
+  });
+
   return (
-    <KeyboardAvoidingView 
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      style={styles.container}
-    >
-      <Text style={styles.title}>RealUltimate</Text>
-      <Text style={styles.subtitle}>Debug Mode</Text>
-      
-      <View style={styles.inputContainer}>
-        <TextInput
-          style={styles.input}
-          placeholder="Email Address"
-          value={email}
-          onChangeText={setEmail}
-          autoCapitalize="none"
-        />
-        <TextInput
-          style={styles.input}
-          placeholder="Password"
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry
-        />
-      </View>
+    <View style={styles.masterContainer}>
+      <KeyboardAvoidingView 
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.keyboardContainer}
+      >
+        <Animated.View style={[styles.headerContainer, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
+            <Animated.View style={{ transform: [{ rotate: spin }], marginBottom: 16 }}>
+                <Ionicons name="aperture" size={80} color={colors.onPrimary} />
+            </Animated.View>
+            <Text style={styles.title}>RealUltimate</Text>
+            <Text style={styles.subtitle}>Team Management & Live Stats</Text>
+        </Animated.View>
+        
+        <Animated.View style={[styles.formContainer, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
+          <TextInput
+            style={styles.input}
+            placeholder="Email Address"
+            placeholderTextColor={colors.textSecondary}
+            value={email}
+            onChangeText={setEmail}
+            autoCapitalize="none"
+          />
+          <TextInput
+            style={styles.input}
+            placeholder="Password"
+            placeholderTextColor={colors.textSecondary}
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry
+          />
 
-      {/* NEW: Error Message Display Area */}
-      {errorMsg ? (
-        <View style={styles.errorBox}>
-            <Text style={styles.errorText}>ERROR: {errorMsg}</Text>
-        </View>
-      ) : null}
+          {errorMsg ? (
+            <View style={styles.errorBox}>
+              <Text style={styles.errorText}>{errorMsg}</Text>
+            </View>
+          ) : null}
 
-      {loading ? (
-        <ActivityIndicator size="large" color="#007AFF" />
-      ) : (
-        <>
-          <TouchableOpacity style={styles.button} onPress={handleLogin}>
-            <Text style={styles.buttonText}>Log In</Text>
-          </TouchableOpacity>
+          {loading ? (
+            <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 20 }} />
+          ) : (
+            <View style={styles.buttonGroup}>
+              <TouchableOpacity style={styles.primaryButton} onPress={handleLogin} activeOpacity={0.8}>
+                <Text style={styles.primaryButtonText}>Sign In</Text>
+              </TouchableOpacity>
 
-          <TouchableOpacity style={[styles.button, styles.registerButton]} onPress={handleRegister}>
-            <Text style={styles.registerText}>Create Account</Text>
-          </TouchableOpacity>
-        </>
-      )}
-    </KeyboardAvoidingView>
+              <TouchableOpacity style={styles.secondaryButton} onPress={handleRegister} activeOpacity={0.6}>
+                <Text style={styles.secondaryButtonText}>Create Account</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </Animated.View>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', padding: 20, backgroundColor: '#f5f5f5' },
-  title: { fontSize: 36, fontWeight: 'bold', textAlign: 'center', color: '#007AFF', marginBottom: 5 },
-  subtitle: { fontSize: 16, textAlign: 'center', color: '#666', marginBottom: 40 },
-  inputContainer: { marginBottom: 20 },
-  input: { backgroundColor: 'white', padding: 15, borderRadius: 10, marginBottom: 15, borderWidth: 1, borderColor: '#ddd', fontSize: 16 },
-  button: { backgroundColor: '#007AFF', padding: 15, borderRadius: 10, alignItems: 'center', marginTop: 10 },
-  buttonText: { color: 'white', fontWeight: 'bold', fontSize: 16 },
-  registerButton: { backgroundColor: 'transparent', marginTop: 10, borderWidth: 1, borderColor: '#007AFF' },
-  registerText: { color: '#007AFF', fontSize: 16, fontWeight: '600' },
-  logoutButton: { marginTop: 50, backgroundColor: 'transparent', borderColor: '#ff4444', borderWidth: 1 },
-  
-  // New Styles for Error Box
-  errorBox: {
-    backgroundColor: '#ffebee',
-    padding: 10,
-    borderRadius: 8,
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: '#ffcdd2'
-  },
-  errorText: {
-    color: '#c62828',
-    textAlign: 'center',
-    fontWeight: 'bold'
-  }
-});
+const getStyles = (colors: ThemeColors) => {
+  const Typography = getTypography(colors);
+  return StyleSheet.create({
+    masterContainer: { flex: 1, backgroundColor: colors.primary },
+    keyboardContainer: { flex: 1, justifyContent: 'center', padding: Layout.padding },
+    
+    headerContainer: { alignItems: 'center', marginBottom: 50 },
+    title: { ...Typography.title, fontSize: 40, color: colors.onPrimary, letterSpacing: -1 },
+    subtitle: { ...Typography.subtitle, color: colors.primaryLight, marginTop: 8 },
+    
+    formContainer: { backgroundColor: colors.surface, padding: 30, borderRadius: Layout.radiusXl, ...Layout.shadow },
+    
+    input: { ...Typography.body, backgroundColor: colors.surface, padding: 16, borderRadius: Layout.radiusMd, color: colors.text, marginBottom: 16, borderWidth: 1, borderColor: colors.border },
+    
+    buttonGroup: { marginTop: 10 },
+    primaryButton: { backgroundColor: colors.primary, padding: 16, borderRadius: Layout.radiusMd, alignItems: 'center', marginBottom: 16 },
+    primaryButtonText: { ...Typography.button, color: colors.onPrimary },
+    
+    secondaryButton: { padding: 16, alignItems: 'center' },
+    secondaryButtonText: { ...Typography.button, color: colors.primary },
+    
+    errorBox: { backgroundColor: colors.errorBg, padding: 12, borderRadius: Layout.radiusMd, marginBottom: 16 },
+    errorText: { ...Typography.bodySmall, color: colors.error, textAlign: 'center' }
+  });
+}

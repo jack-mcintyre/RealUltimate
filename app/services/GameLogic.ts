@@ -6,7 +6,7 @@ export const GameLogic = {
     initPlayerStats: (state: GameState, playerId: string) => {
         if (!state.playerStats) state.playerStats = {};
         if (!state.playerStats[playerId]) {
-            state.playerStats[playerId] = { goals: 0, assists: 0, blocks: 0, turns: 0 };
+            state.playerStats[playerId] = { goals: 0, assists: 0, blocks: 0, turns: 0, passes: 0, callahans: 0, timeWithDisc: 0 };
         }
     },
 
@@ -31,7 +31,16 @@ export const GameLogic = {
                 }
 
                 // Update Stats
-                if (event.playerId) Object.assign(newState.playerStats[event.playerId], { goals: newState.playerStats[event.playerId].goals + 1 });
+                if (event.playerId) {
+                    Object.assign(newState.playerStats[event.playerId], { 
+                        goals: newState.playerStats[event.playerId].goals + 1,
+                        timeWithDisc: newState.playerStats[event.playerId].timeWithDisc + (event.timeElapsedMs || 0)
+                    });
+                }
+                if (event.assistPlayerId) {
+                    GameLogic.initPlayerStats(newState, event.assistPlayerId);
+                    Object.assign(newState.playerStats[event.assistPlayerId], { assists: newState.playerStats[event.assistPlayerId].assists + 1 });
+                }
 
                 // Possession flips for pull
                 newState.possession = newState.possession === newState.team1Id ? newState.team2Id : newState.team1Id;
@@ -53,7 +62,12 @@ export const GameLogic = {
             case 'T':
             case 'Drop':
                 // Update Stats
-                if (event.playerId) Object.assign(newState.playerStats[event.playerId], { turns: newState.playerStats[event.playerId].turns + 1 });
+                if (event.playerId) {
+                    Object.assign(newState.playerStats[event.playerId], { 
+                        turns: newState.playerStats[event.playerId].turns + 1,
+                        timeWithDisc: newState.playerStats[event.playerId].timeWithDisc + (event.timeElapsedMs || 0)
+                    });
+                }
 
                 // Possession flips
                 newState.possession = newState.possession === newState.team1Id ? newState.team2Id : newState.team1Id;
@@ -72,10 +86,40 @@ export const GameLogic = {
                 newState.possession = newState.possession === newState.team1Id ? newState.team2Id : newState.team1Id;
                 break;
 
+            case 'Callahan_US':
+                if (event.playerId) {
+                    Object.assign(newState.playerStats[event.playerId], { 
+                        goals: newState.playerStats[event.playerId].goals + 1,
+                        blocks: newState.playerStats[event.playerId].blocks + 1,
+                        callahans: newState.playerStats[event.playerId].callahans + 1
+                    });
+                }
+                newState.score1 += 1;
+                // US scores, so US pulls to THEM
+                newState.possession = newState.team2Id;
+                break;
+
+            case 'Callahan_THEM':
+                if (event.playerId) {
+                    Object.assign(newState.playerStats[event.playerId], { turns: newState.playerStats[event.playerId].turns + 1 });
+                }
+                newState.score2 += 1;
+                // THEM scores, so THEM pulls to US
+                newState.possession = newState.team1Id;
+                break;
+
             case 'Halftime':
                 newState.isHalftime = true;
-                // Give possession to whoever DID NOT receive the very first pull
                 newState.possession = newState.firstHalfPossession === newState.team1Id ? newState.team2Id : newState.team1Id;
+                break;
+
+            case 'Pass':
+                if (event.playerId) {
+                    Object.assign(newState.playerStats[event.playerId], { 
+                        passes: newState.playerStats[event.playerId].passes + 1,
+                        timeWithDisc: newState.playerStats[event.playerId].timeWithDisc + (event.timeElapsedMs || 0)
+                    });
+                }
                 break;
 
             case 'End Halftime':

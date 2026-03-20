@@ -1,11 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, Modal } from 'react-native';
 import { auth } from '../../firebaseConfig';
 import { GameService } from '../services/GameService';
 import { TeamService } from '../services/TeamService';
 import { GameState, Team } from '../services/types';
+import { getTypography, Layout } from '../theme/DesignSystem';
+import { useTheme, ThemeColors } from '../theme/ThemeContext';
 
 export default function TeamDashboardScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
@@ -15,6 +17,15 @@ export default function TeamDashboardScreen() {
     // Player Input
     const [playerName, setPlayerName] = useState('');
     const [playerNumber, setPlayerNumber] = useState('');
+    
+    // Analytics Filter
+    const [selectedYear, setSelectedYear] = useState<string>('All Time');
+    
+    // Team Roles UI
+    const [showPermissionsModal, setShowPermissionsModal] = useState(false);
+
+    const { isDark, colors } = useTheme();
+    const styles = getStyles(colors);
 
     useEffect(() => {
         if (!id) return;
@@ -23,7 +34,6 @@ export default function TeamDashboardScreen() {
             setTeam(t);
         });
 
-        // Fetch past finalized games
         const loadPastGames = async () => {
             const history = await GameService.getPastGamesForTeam(id);
             setPastGames(history);
@@ -44,14 +54,13 @@ export default function TeamDashboardScreen() {
         }
     };
 
-    if (!team) return <View style={styles.centerContainer}><Text>Loading Team...</Text></View>;
+    if (!team) return <View style={styles.centerContainer}><Text style={styles.loadingText}>Loading Team...</Text></View>;
 
-    // Permission Check
     const isCoach = auth.currentUser?.uid === team.coachId;
 
     const handleDeleteTeam = () => {
         if (Platform.OS === 'web') {
-            const confirmed = window.confirm("Are you sure you want to permanently delete this team? This action cannot be undone.");
+            const confirmed = window.confirm("Are you sure you want to delete this team?");
             if (confirmed) {
                 if (auth.currentUser) {
                     TeamService.deleteTeam(team.id, auth.currentUser.uid)
@@ -62,197 +71,411 @@ export default function TeamDashboardScreen() {
         } else {
             Alert.alert(
                 "Delete Team",
-                "Are you sure you want to permanently delete this team? This action cannot be undone.",
+                "Are you sure you want to delete this team?",
                 [
                     { text: "Cancel", style: "cancel" },
-                    {
-                        text: "Delete", 
-                        style: "destructive", 
-                        onPress: async () => {
-                            try {
-                                if (auth.currentUser) {
-                                    await TeamService.deleteTeam(team.id, auth.currentUser.uid);
-                                    router.replace('/teams');
-                                }
-                            } catch (e) {
-                                Alert.alert("Error", "Failed to delete team.");
+                    { text: "Delete", style: "destructive", onPress: async () => {
+                        try {
+                            if (auth.currentUser) {
+                                await TeamService.deleteTeam(team.id, auth.currentUser.uid);
+                                router.replace('/teams');
                             }
+                        } catch (e) {
+                            Alert.alert("Error", "Failed to delete team.");
                         }
-                    }
+                    }}
                 ]
             );
         }
     };
 
+    const handleRoleChange = (managerId: string, currentRole: string) => {
+        if (!team) return;
+        Alert.alert(
+            "Change Role",
+            "Select new role for this manager",
+            [
+                { text: "Assistant Coach", onPress: () => TeamService.updateManagerRole(team.id, managerId, "Assistant Coach") },
+                { text: "Stats Taker", onPress: () => TeamService.updateManagerRole(team.id, managerId, "Stats Taker") },
+                { text: "Cancel", style: "cancel" }
+            ]
+        );
+    };
+
+    const handleRemoveManager = (managerId: string) => {
+        if (!team) return;
+        Alert.alert(
+            "Remove Manager",
+            "Are you sure you want to remove this user from the team managers?",
+            [
+                { text: "Cancel", style: "cancel" },
+                { text: "Remove", style: "destructive", onPress: () => TeamService.removeManager(team.id, managerId) }
+            ]
+        );
+    };
+    const availableYears = ['All Time', ...Array.from(new Set(pastGames.map(g => {
+        return g.history?.length ? new Date(g.history[g.history.length-1].timestamp).getFullYear().toString() : 'Unknown';
+    }))).filter(y => y !== 'Unknown').sort((a,b) => b.localeCompare(a))];
+
+    const filteredGames = pastGames.filter(g => {
+        if (selectedYear === 'All Time') return true;
+        if (!g.history?.length) return false;
+        return new Date(g.history[g.history.length-1].timestamp).getFullYear().toString() === selectedYear;
+    });
+
+    const totalGames = filteredGames.length;
+    let wins = 0;
+    filteredGames.forEach(g => {
+        const isTeam1 = g.team1Id === team.id;
+        const ourScore = isTeam1 ? g.score1 : g.score2;
+        const theirScore = isTeam1 ? g.score2 : g.score1;
+        if (ourScore > theirScore) wins++;
+    });
+    const winrate = totalGames > 0 ? Math.round((wins / totalGames) * 100) : 0;
+
     return (
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.container}>
-            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
-                <View style={styles.headerCard}>
-                    <Text style={styles.teamName}>{team.name}</Text>
-                {isCoach ? (
-                    <View style={{ alignItems: 'center' }}>
-                        <View style={[styles.codeBadge, { marginBottom: 5 }]}>
-                            <Text style={styles.codeText}>Coach Code: {team.accessCode}</Text>
-                        </View>
-                        <View style={[styles.codeBadge, { backgroundColor: '#ffe5e5' }]}>
-                            <Text style={[styles.codeText, { color: '#ff4444' }]}>Spectator Code: {team.spectatorCode}</Text>
-                        </View>
-                    </View>
-                ) : (
-                    <View style={[styles.codeBadge, { backgroundColor: '#ffe5e5' }]}>
-                        <Text style={[styles.codeText, { color: '#ff4444', fontSize: 14 }]}>Spectating Mode</Text>
-                    </View>
-                )}
+            <View style={styles.topAppBar}>
+                <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+                    <Ionicons name="arrow-back" size={24} color={colors.text} />
+                </TouchableOpacity>
+                <Text style={styles.topAppBarTitle} numberOfLines={1}>{team.name}</Text>
+                <View style={{ width: 40 }} />
             </View>
 
-            {/* ACTION BUTTONS */}
-            <View style={styles.actionRow}>
-                {isCoach ? (
-                    <TouchableOpacity 
-                        style={[styles.primaryButton, { flex: 1, marginRight: team.activeGameId ? 10 : 0, backgroundColor: '#34C759' }]}
-                        onPress={() => router.push(`/game/record/${team.id}` as any)}
-                    >
-                        <Ionicons name="play-circle" size={20} color="#fff" style={{ marginRight: 8 }} />
-                        <Text style={styles.primaryButtonText}>{team.activeGameId ? 'Resume Game' : 'Record Game'}</Text>
-                    </TouchableOpacity>
-                ) : null}
-
-                {team.activeGameId && (
-                    <TouchableOpacity 
-                        style={[styles.primaryButton, { flex: 1, backgroundColor: '#007AFF' }]}
-                        onPress={() => router.push(`/game/watch/${team.id}` as any)}
-                    >
-                        <Ionicons name="radio" size={20} color="#fff" style={{ marginRight: 8 }} />
-                        <Text style={styles.primaryButtonText}>Watch Live</Text>
-                    </TouchableOpacity>
-                )}
-            </View>
-
-            {/* ROSTER MANAGEMENT */}
-            {isCoach && (
-                <View style={styles.addPlayerContainer}>
-                    <Text style={styles.sectionTitle}>Add Player</Text>
-                    <View style={styles.inputRow}>
-                        <TextInput
-                            style={[styles.input, { flex: 3 }]}
-                            placeholder="Full Name"
-                            placeholderTextColor="#999"
-                            value={playerName}
-                            onChangeText={setPlayerName}
-                        />
-                        <TextInput
-                            style={[styles.input, { flex: 1, marginLeft: 10 }]}
-                            placeholder="#"
-                            placeholderTextColor="#999"
-                            keyboardType="numeric"
-                            value={playerNumber}
-                            onChangeText={setPlayerNumber}
-                        />
+            <ScrollView style={styles.mainContent} contentContainerStyle={{ paddingBottom: 60 }} showsVerticalScrollIndicator={false}>
+                
+                {/* TEAM INFO CARD */}
+                <View style={styles.infoCard}>
+                    <View style={styles.teamBadgeLg}>
+                        <Text style={styles.teamBadgeTextLg}>{team.name.substring(0, 2).toUpperCase()}</Text>
                     </View>
-                    <TouchableOpacity style={styles.secondaryButton} onPress={handleAddPlayer}>
-                        <Text style={styles.secondaryButtonText}>Add to Roster</Text>
-                    </TouchableOpacity>
+                    <Text style={styles.teamNameTitle}>{team.name}</Text>
+                    
+                    {isCoach ? (
+                        <View style={styles.codeContainerRow}>
+                            <View style={styles.codeBadge}>
+                                <Text style={styles.codeBadgeLabel}>COACH CODE</Text>
+                                <Text style={styles.codeBadgeCode}>{team.accessCode}</Text>
+                            </View>
+                            <View style={styles.codeBadge}>
+                                <Text style={styles.codeBadgeLabel}>FAN CODE</Text>
+                                <Text style={styles.codeBadgeCode}>{team.spectatorCode}</Text>
+                            </View>
+                        </View>
+                    ) : (
+                        <View style={styles.codeBadge}>
+                            <Text style={styles.codeBadgeLabel}>ACCESS</Text>
+                            <Text style={styles.codeBadgeCode}>SPECTATOR</Text>
+                        </View>
+                    )}
                 </View>
-            )}
 
-            <Text style={[styles.sectionTitle, { marginTop: 20 }]}>Current Roster ({team.players ? Object.keys(team.players).length : 0})</Text>
-            <ScrollView style={styles.rosterList}>
-                {team.players && Object.values(team.players).map((p) => (
-                    <View key={p.id} style={styles.playerCard}>
-                        <View style={styles.playerInfo}>
-                            <Text style={styles.playerNumber}>#{p.number || '--'}</Text>
-                            <Text style={styles.playerName}>{p.name}</Text>
+                {/* ACTION BUTTONS */}
+                <View style={styles.actionRow}>
+                    {isCoach ? (
+                        <TouchableOpacity 
+                            style={[styles.primaryActionBtn, { flex: 1, marginRight: team.activeGameId ? 16 : 0 }]}
+                            onPress={() => router.push(`/game/record/${team.id}` as any)}
+                            activeOpacity={0.8}
+                        >
+                            <Ionicons name={team.activeGameId ? "play" : "videocam"} size={24} color={colors.onPrimary} style={{ marginBottom: 8 }} />
+                            <Text style={styles.primaryActionBtnText}>{team.activeGameId ? 'Resume Match' : 'Record Match'}</Text>
+                        </TouchableOpacity>
+                    ) : null}
+
+                    {team.activeGameId && (
+                        <TouchableOpacity 
+                            style={[styles.liveActionBtn, { flex: 1 }]}
+                            onPress={() => router.push(`/game/watch/${team.id}` as any)}
+                            activeOpacity={0.8}
+                        >
+                            <Ionicons name="radio" size={24} color={colors.onPrimary} style={{ marginBottom: 8 }} />
+                            <Text style={styles.primaryActionBtnText}>Watch Live</Text>
+                        </TouchableOpacity>
+                    )}
+                </View>
+
+                {/* ROSTER MANAGEMENT */}
+                <View style={styles.sectionHeader}>
+                    <Text style={styles.sectionTitle}>Roster ({team.players ? Object.keys(team.players).length : 0})</Text>
+                </View>
+
+                {isCoach && (
+                    <View style={styles.addPlayerContainer}>
+                        <View style={styles.inputRow}>
+                            <TextInput
+                                style={[styles.input, { flex: 3 }]}
+                                placeholder="Player Name"
+                                placeholderTextColor={colors.textSecondary}
+                                value={playerName}
+                                onChangeText={setPlayerName}
+                            />
+                            <TextInput
+                                style={[styles.inputNum, { flex: 1, marginLeft: 12 }]}
+                                placeholder="#"
+                                placeholderTextColor={colors.textSecondary}
+                                keyboardType="numeric"
+                                value={playerNumber}
+                                onChangeText={setPlayerNumber}
+                            />
                         </View>
-                        {isCoach && (
-                            <TouchableOpacity style={styles.iconButton}>
-                                <Ionicons name="trash-outline" size={20} color="#ff4444" />
-                            </TouchableOpacity>
+                        <TouchableOpacity style={styles.addPlayerBtn} onPress={handleAddPlayer}>
+                            <Ionicons name="add" size={20} color={colors.primary} />
+                            <Text style={styles.addPlayerBtnText}>Add Player</Text>
+                        </TouchableOpacity>
+                    </View>
+                )}
+
+                <View style={styles.rosterList}>
+                    {team.players && Object.values(team.players).map((p) => (
+                        <TouchableOpacity 
+                            key={p.id} 
+                            style={styles.playerCard} 
+                            onPress={() => router.push(`/team/${team.id}/player/${p.id}`)}
+                            activeOpacity={0.7}
+                        >
+                            <View style={styles.playerInfo}>
+                                <View style={styles.playerNumberBox}>
+                                    <Text style={styles.playerNumberText}>{p.number || '--'}</Text>
+                                </View>
+                                <Text style={[styles.playerNameText, { color: colors.primary }]} numberOfLines={1}>{p.name}</Text>
+                            </View>
+                            {isCoach && (
+                                <TouchableOpacity style={styles.playerDelBtn}>
+                                    <Ionicons name="close" size={20} color={colors.textSecondary} />
+                                </TouchableOpacity>
+                            )}
+                        </TouchableOpacity>
+                    ))}
+                </View>
+
+                {isCoach && (
+                    <TouchableOpacity style={styles.permissionsBtn} onPress={() => setShowPermissionsModal(true)} activeOpacity={0.8}>
+                        <Ionicons name="shield-checkmark" size={20} color={colors.primary} />
+                        <Text style={styles.permissionsBtnText}>Manage Team Permissions</Text>
+                    </TouchableOpacity>
+                )}
+
+                {/* PAST GAMES & ANALYTICS */}
+                {pastGames.length > 0 && (
+                    <View style={{ marginTop: 24 }}>
+                        <View style={styles.sectionHeader}>
+                            <Text style={styles.sectionTitle}>Match History & Stats</Text>
+                        </View>
+                        
+                        {/* YEAR FILTER */}
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
+                            <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 4 }}>
+                                {availableYears.map(year => (
+                                    <TouchableOpacity 
+                                        key={year} 
+                                        style={[styles.filterChip, selectedYear === year && styles.filterChipActive]}
+                                        onPress={() => setSelectedYear(year)}
+                                        activeOpacity={0.8}
+                                    >
+                                        <Text style={[styles.filterChipText, selectedYear === year && styles.filterChipTextActive]}>{year}</Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+                        </ScrollView>
+                        
+                        {/* QUICK STATS */}
+                        <View style={{ flexDirection: 'row', gap: 12, marginBottom: 24 }}>
+                            <View style={styles.statCard}>
+                                <Text style={styles.statValue}>{totalGames}</Text>
+                                <Text style={styles.statLabel}>Matches</Text>
+                            </View>
+                            <View style={styles.statCard}>
+                                <Text style={[styles.statValue, { color: colors.primary }]}>{winrate}%</Text>
+                                <Text style={styles.statLabel}>Win Rate</Text>
+                            </View>
+                            <View style={styles.statCard}>
+                                <Text style={[styles.statValue, { color: colors.success }]}>{wins}</Text>
+                                <Text style={styles.statLabel}>Total Wins</Text>
+                            </View>
+                        </View>
+
+                        {filteredGames.length === 0 ? (
+                            <Text style={{ ...getTypography(colors).bodySmall, textAlign: 'center', marginTop: 12 }}>No matches recorded for {selectedYear}.</Text>
+                        ) : (
+                            filteredGames.map((game) => {
+                                const isTeam1 = game.team1Id === team.id;
+                                const opponentName = isTeam1 ? game.team2Name || "Opponent" : team.name;
+                            const ourScore = isTeam1 ? game.score1 : game.score2;
+                            const theirScore = isTeam1 ? game.score2 : game.score1;
+                            const dateText = game.history && game.history.length > 0 
+                                ? new Date(game.history[game.history.length - 1].timestamp).toLocaleDateString()
+                                : "Unknown Date";
+                            const isWin = ourScore > theirScore;
+                            const isLoss = theirScore > ourScore;
+                            const bgColor = isWin ? colors.success : (isLoss ? colors.error : colors.surfaceSecondary);
+                            const textColor = (isWin || isLoss) ? colors.onPrimary : colors.text;
+                            const subTextColor = (isWin || isLoss) ? 'rgba(255,255,255,0.8)' : colors.textSecondary;
+                            const scoreBoxBg = (isWin || isLoss) ? 'rgba(0,0,0,0.15)' : (isDark ? 'rgba(255,255,255,0.05)' : colors.surface);
+
+                            return (
+                                <TouchableOpacity 
+                                    key={game.gameId} 
+                                    style={[styles.historyCard, { backgroundColor: bgColor }]}
+                                    onPress={() => router.push(`/game/history/${game.gameId}` as any)}
+                                    activeOpacity={0.8}
+                                >
+                                    <View style={styles.historyMatchInfo}>
+                                        <Text style={[styles.historyOpponent, { color: textColor }]} numberOfLines={1}>vs {opponentName}</Text>
+                                        <Text style={[styles.historyDate, { color: subTextColor }]}>{dateText}</Text>
+                                    </View>
+                                    <View style={[styles.historyScoreBox, { backgroundColor: scoreBoxBg }]}>
+                                        <Text style={[styles.historyScoreText, { color: textColor }]}>
+                                            {ourScore} - {theirScore}
+                                        </Text>
+                                    </View>
+                                </TouchableOpacity>
+                            );
+                        })
                         )}
                     </View>
-                ))}
+                )}
+
+                {isCoach && (
+                    <TouchableOpacity style={styles.deleteTeamBtn} onPress={handleDeleteTeam}>
+                        <Ionicons name="trash-outline" size={20} color={colors.error} />
+                        <Text style={styles.deleteTeamBtnText}>Delete Team</Text>
+                    </TouchableOpacity>
+                )}
             </ScrollView>
 
-            {/* PAST GAMES */}
-            {pastGames.length > 0 && (
-                <View style={{ marginTop: 30 }}>
-                    <Text style={[styles.sectionTitle, { marginBottom: 10 }]}>Past Games</Text>
-                    {pastGames.map((game) => {
-                        const isTeam1 = game.team1Id === team.id;
-                        const opponentName = isTeam1 ? game.team2Name || "Opponent" : team.name;
-                        const ourScore = isTeam1 ? game.score1 : game.score2;
-                        const theirScore = isTeam1 ? game.score2 : game.score1;
-                        const dateText = game.history && game.history.length > 0 
-                            ? new Date(game.history[game.history.length - 1].timestamp).toLocaleDateString()
-                            : "Unknown Date";
-
-                        return (
-                            <TouchableOpacity 
-                                key={game.gameId} 
-                                style={[styles.playerCard, { paddingVertical: 20 }]}
-                                onPress={() => router.push(`/game/history/${game.gameId}` as any)}
-                            >
-                                <View style={{ flex: 1 }}>
-                                    <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#333' }}>
-                                        vs {opponentName}
-                                    </Text>
-                                    <Text style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
-                                        {dateText}
-                                    </Text>
-                                </View>
-                                <View style={{ alignItems: 'flex-end' }}>
-                                    <Text style={{ fontSize: 22, fontWeight: 'bold', color: ourScore > theirScore ? '#34C759' : '#ff3b30' }}>
-                                        {ourScore} - {theirScore}
-                                    </Text>
-                                    <Text style={{ fontSize: 12, color: '#666', marginTop: 2 }}>
-                                        Final
-                                    </Text>
-                                </View>
+            {/* TEAM PERMISSIONS MODAL */}
+            <Modal visible={showPermissionsModal} animationType="slide" transparent={true}>
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalContent}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+                            <View style={{ flex: 1 }}>
+                                <Text style={[styles.modalTitle, { marginBottom: 4 }]}>Team Permissions</Text>
+                                <Text style={styles.modalSub}>Manage who has Manager/Coach access to edit rosters and start games.</Text>
+                            </View>
+                            <TouchableOpacity onPress={() => setShowPermissionsModal(false)} style={{ padding: 4 }}>
+                                <Ionicons name="close" size={24} color={colors.textSecondary} />
                             </TouchableOpacity>
-                        );
-                    })}
-                </View>
-            )}
+                        </View>
 
-            {isCoach && (
-                <TouchableOpacity style={styles.deleteButton} onPress={handleDeleteTeam}>
-                    <Ionicons name="trash-outline" size={20} color="#ff3b30" style={{ marginRight: 8 }} />
-                    <Text style={styles.deleteButtonText}>Delete Team</Text>
-                </TouchableOpacity>
-            )}
-            </ScrollView>
+                        <View style={styles.permissionsList}>
+                            {team.managers && Object.entries(team.managers).map(([uid, r]) => (
+                                <View key={uid} style={styles.permissionRow}>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={styles.permissionEmail}>{r.email}</Text>
+                                        <TouchableOpacity onPress={() => handleRoleChange(uid, r.role)} disabled={r.role === 'Head Coach'}>
+                                            <Text style={styles.permissionRole}>
+                                                {r.role} {r.role !== 'Head Coach' && <Ionicons name="create-outline" size={14} />}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                    {r.role !== 'Head Coach' && (
+                                        <TouchableOpacity onPress={() => handleRemoveManager(uid)}>
+                                            <Ionicons name="trash-outline" size={20} color={colors.error} />
+                                        </TouchableOpacity>
+                                    )}
+                                </View>
+                            ))}
+                        </View>
+
+                        <View style={styles.addPermissionBox}>
+                            <Text style={styles.inputLabel}>ADD TEAM MANAGER</Text>
+                            <Text style={{ ...getTypography(colors).bodySmall, color: colors.textSecondary, marginBottom: 12 }}>
+                                To allow another user to record games and manage the roster, have them download the app and enter this code on the Teams Hub.
+                            </Text>
+                            <View style={{ backgroundColor: colors.surfaceSecondary, padding: 16, borderRadius: Layout.radiusMd, alignItems: 'center' }}>
+                                <Text style={{ ...getTypography(colors).title, fontSize: 24, letterSpacing: 4 }}>{team.accessCode}</Text>
+                            </View>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
         </KeyboardAvoidingView>
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#f5f5f5', padding: 15 },
-    centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+const getStyles = (colors: ThemeColors) => {
+    const Typography = getTypography(colors);
+    return StyleSheet.create({
+        container: { flex: 1, backgroundColor: colors.background },
+        centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.background },
+        loadingText: { ...Typography.body, color: colors.textSecondary },
+        
+        topAppBar: { height: 60, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: Layout.padding, backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
+        backButton: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginLeft: -8 },
+        topAppBarTitle: { ...Typography.title, fontSize: 18, flex: 1, textAlign: 'center' },
 
-    headerCard: { backgroundColor: '#fff', padding: 20, borderRadius: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3, marginBottom: 15, alignItems: 'center' },
-    teamName: { fontSize: 24, fontWeight: 'bold', color: '#111', marginBottom: 10 },
-    codeBadge: { backgroundColor: '#e0f0ff', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 20 },
-    codeText: { color: '#007AFF', fontWeight: 'bold', fontSize: 16, letterSpacing: 1 },
+        mainContent: { flex: 1, paddingHorizontal: Layout.padding, paddingTop: 24 },
+        
+        infoCard: { alignItems: 'center', padding: 32, backgroundColor: colors.surface, borderRadius: Layout.radiusLg, marginBottom: 24, borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
+        teamBadgeLg: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.primaryLight, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
+        teamBadgeTextLg: { ...Typography.title, fontSize: 32, color: colors.primary },
+        teamNameTitle: { ...Typography.title, fontSize: 24, marginBottom: 20, textAlign: 'center' },
+        
+        codeContainerRow: { flexDirection: 'row', gap: 16, width: '100%', justifyContent: 'center' },
+        codeBadge: { backgroundColor: colors.surfaceSecondary, paddingVertical: 12, paddingHorizontal: 20, borderRadius: Layout.radiusMd, alignItems: 'center', borderWidth: 1, borderColor: colors.border },
+        codeBadgeLabel: { ...Typography.label, marginBottom: 4 },
+        codeBadgeCode: { ...Typography.title, fontSize: 20, color: colors.text, letterSpacing: 2 },
 
-    actionRow: { flexDirection: 'row', marginBottom: 20 },
-    primaryButton: { flexDirection: 'row', backgroundColor: '#007AFF', padding: 15, borderRadius: 10, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3 },
-    primaryButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+        actionRow: { flexDirection: 'row', marginBottom: 32 },
+        primaryActionBtn: { backgroundColor: colors.primary, paddingVertical: 20, paddingHorizontal: 16, borderRadius: Layout.radiusMd, alignItems: 'center', justifyContent: 'center' },
+        primaryActionBtnText: { ...Typography.button, color: colors.onPrimary },
+        liveActionBtn: { backgroundColor: colors.error, paddingVertical: 20, paddingHorizontal: 16, borderRadius: Layout.radiusMd, alignItems: 'center', justifyContent: 'center' },
 
-    sectionTitle: { fontSize: 18, fontWeight: 'bold', color: '#444', marginBottom: 10 },
+        sectionHeader: { marginBottom: 16 },
+        sectionTitle: { ...Typography.subtitle, fontWeight: '600', color: colors.text },
 
-    addPlayerContainer: { backgroundColor: '#fff', padding: 15, borderRadius: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 2, marginBottom: 10 },
-    inputRow: { flexDirection: 'row', marginBottom: 15 },
-    input: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#ddd', padding: 12, borderRadius: 8, fontSize: 16, color: '#333' },
+        addPlayerContainer: { backgroundColor: colors.surface, padding: 20, borderRadius: Layout.radiusLg, marginBottom: 24, borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
+        inputRow: { flexDirection: 'row', marginBottom: 16 },
+        input: { ...Typography.body, backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border, padding: 12, borderRadius: Layout.radiusMd, color: colors.text },
+        inputNum: { ...Typography.body, backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border, padding: 12, borderRadius: Layout.radiusMd, color: colors.text, textAlign: 'center' },
+        addPlayerBtn: { flexDirection: 'row', backgroundColor: 'transparent', padding: 12, borderRadius: Layout.radiusMd, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.primary },
+        addPlayerBtnText: { ...Typography.button, color: colors.primary, marginLeft: 8 },
 
-    secondaryButton: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#007AFF', padding: 12, borderRadius: 8, alignItems: 'center', width: '100%' },
-    secondaryButtonText: { color: '#007AFF', fontSize: 16, fontWeight: 'bold' },
+        rosterList: { marginBottom: 24 },
+        playerCard: { flexDirection: 'row', backgroundColor: colors.surface, padding: 16, borderRadius: Layout.radiusMd, marginBottom: 12, alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
+        playerInfo: { flexDirection: 'row', alignItems: 'center' },
+        playerNumberBox: { width: 36, height: 36, borderRadius: Layout.radiusSm, backgroundColor: colors.surfaceSecondary, alignItems: 'center', justifyContent: 'center', marginRight: 16 },
+        playerNumberText: { ...Typography.body, fontWeight: '700', color: colors.textSecondary },
+        playerNameText: { ...Typography.body, fontWeight: '600' },
+        playerDelBtn: { padding: 8 },
 
-    rosterList: { flex: 1 },
-    playerCard: { flexDirection: 'row', backgroundColor: '#fff', padding: 15, borderRadius: 8, marginBottom: 10, alignItems: 'center', justifyContent: 'space-between', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 1, elevation: 1 },
-    playerInfo: { flexDirection: 'row', alignItems: 'center' },
-    playerNumber: { fontSize: 18, fontWeight: 'bold', color: '#007AFF', width: 40 },
-    playerName: { fontSize: 18, color: '#333', marginLeft: 10 },
-    iconButton: { padding: 5 },
+        historyCard: { flexDirection: 'row', backgroundColor: colors.surface, padding: 16, borderRadius: Layout.radiusMd, marginBottom: 12, alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
+        historyMatchInfo: { flex: 1, paddingRight: 10 },
+        historyOpponent: { ...Typography.body, fontWeight: '600', marginBottom: 4 },
+        historyDate: { ...Typography.bodySmall },
+        historyScoreBox: { backgroundColor: colors.surfaceSecondary, paddingVertical: 6, paddingHorizontal: 12, borderRadius: Layout.radiusSm },
+        historyScoreText: { ...Typography.title, fontSize: 18 },
 
-    deleteButton: { flexDirection: 'row', backgroundColor: '#ffe5e5', padding: 15, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginTop: 20, marginBottom: 30 },
-    deleteButtonText: { color: '#ff3b30', fontSize: 16, fontWeight: 'bold' }
-});
+        deleteTeamBtn: { flexDirection: 'row', backgroundColor: colors.errorBg, padding: 16, borderRadius: Layout.radiusMd, alignItems: 'center', justifyContent: 'center', marginTop: 16, marginBottom: 32 },
+        deleteTeamBtnText: { ...Typography.button, color: colors.error, marginLeft: 8 },
+
+        filterChip: { backgroundColor: colors.surfaceSecondary, paddingHorizontal: 16, paddingVertical: 8, borderRadius: Layout.radiusFull, borderWidth: 1, borderColor: colors.border },
+        filterChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+        filterChipText: { ...Typography.bodySmall, fontWeight: '600', color: colors.textSecondary },
+        filterChipTextActive: { color: colors.onPrimary },
+
+        statCard: { flex: 1, backgroundColor: colors.surface, padding: 16, borderRadius: Layout.radiusMd, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', ...Layout.shadow },
+        statValue: { ...Typography.title, fontSize: 32, marginBottom: 4 },
+        statLabel: { ...Typography.bodySmall, textAlign: 'center', fontSize: 11 },
+
+        permissionsBtn: { flexDirection: 'row', backgroundColor: colors.surface, padding: 16, borderRadius: Layout.radiusMd, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.border, marginBottom: 12, ...Layout.shadow },
+        permissionsBtnText: { ...Typography.button, color: colors.primary, marginLeft: 8 },
+
+        modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+        modalContent: { backgroundColor: colors.background, borderTopLeftRadius: Layout.radiusLg, borderTopRightRadius: Layout.radiusLg, padding: Layout.padding, paddingTop: 32, paddingBottom: Platform.OS === 'ios' ? 40 : 24, ...Layout.shadow },
+        modalTitle: { ...Typography.title, fontSize: 20 },
+        modalSub: { ...Typography.bodySmall },
+        
+        permissionsList: { backgroundColor: colors.surface, borderRadius: Layout.radiusLg, paddingHorizontal: 16, marginBottom: 24, borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
+        permissionRow: { flexDirection: 'row', paddingVertical: 16, alignItems: 'center', borderBottomWidth: 1, borderBottomColor: colors.border },
+        permissionEmail: { ...Typography.body, fontWeight: '600' },
+        permissionRole: { ...Typography.bodySmall, color: colors.primary, marginTop: 2 },
+        
+        addPermissionBox: { backgroundColor: colors.surface, padding: 20, borderRadius: Layout.radiusLg, borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
+        inputLabel: { ...Typography.label, marginBottom: 8 },
+        addPermissionBtn: { backgroundColor: colors.primary, paddingHorizontal: 20, paddingVertical: 14, borderRadius: Layout.radiusMd, alignItems: 'center', justifyContent: 'center' },
+        addPermissionBtnText: { ...Typography.button, color: colors.onPrimary }
+    });
+}

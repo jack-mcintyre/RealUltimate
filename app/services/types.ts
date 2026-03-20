@@ -10,6 +10,14 @@ export interface PlayerStats {
   assists: number;
   blocks: number; // D's
   turns: number; // Throwaways + Drops
+  passes: number;
+  callahans: number;
+  timeWithDisc: number; // in milliseconds
+}
+
+export interface TeamManager {
+  email: string;
+  role: string;
 }
 
 export interface Team {
@@ -19,6 +27,7 @@ export interface Team {
   accessCode: string; // Coach Code
   spectatorCode?: string; // Spectator Code (Optional for backward compatibility)
   players: Record<string, Player>; // Map player ID to Player for easy access
+  managers?: Record<string, TeamManager>; // RBAC Permissions map
   role?: 'coach' | 'spectator'; // Client-side only - indicates user's relation
   activeGameId?: string; // Tethers a running game session to this team
 }
@@ -31,11 +40,15 @@ export type EventType =
   | 'Drop' // Receiver dropped the disc
   | 'D-Block' // Defensive block on the disc
   | 'D' // (Legacy)
+  | 'Pass' // Advanced tracking: when a player passes to another
   | 'Opponent Score' // When the other team scores (so we don't need a specific player)
   | 'Opponent Turnover' // When the other team turns it over (so we don't need a specific player)
+  | 'Callahan_US'
+  | 'Callahan_THEM'
   | 'Halftime' // Context event to flip possession and track periods
   | 'End Halftime'
-  | 'Timeout';
+  | 'Timeout'
+  | 'Pass'; // Advanced tracking: when a player passes to another
 
 export interface GameEvent {
   id: string; // Unique ID for event
@@ -44,6 +57,8 @@ export interface GameEvent {
   timestamp: number;
   teamId?: string;
   playerId?: string;
+  assistPlayerId?: string; // Player who threw the assist
+  timeElapsedMs?: number; // Time spent on a pass/possession
 }
 
 export interface GameState {
@@ -60,6 +75,15 @@ export interface GameState {
   isGameActive: boolean;
   playerStats: Record<string, PlayerStats>;
   history?: GameEvent[];
+  advancedTracking?: boolean; // If true, tracks passing & possession time
+  sotgEnabled?: boolean;
+  sotgScore?: {
+    rules: number;
+    fouls: number;
+    fairness: number;
+    attitude: number;
+    communication: number;
+  };
 }
 
 export const INITIAL_GAME_STATE: GameState = {
@@ -74,5 +98,7 @@ export const INITIAL_GAME_STATE: GameState = {
   isHalftime: false,
   isGameActive: false,
   playerStats: {},
-  history: []
+  history: [],
+  advancedTracking: false,
+  sotgEnabled: false
 };

@@ -1,16 +1,18 @@
-import Ionicons from '@expo/vector-icons/Ionicons'
-import { Tabs, router } from 'expo-router'
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { Tabs, router } from 'expo-router';
 import { useEffect } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../../firebaseConfig';
+import { getTypography } from '../theme/DesignSystem';
+import { useTheme } from '../theme/ThemeContext';
 
 export default function TabLayout() {
+    const { colors } = useTheme();
     
     // Auth Guard
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, (user) => {
             if (!user) {
-                // Not logged in? Get out of the tabs!
                 router.replace('/');
             }
         });
@@ -20,11 +22,22 @@ export default function TabLayout() {
     return (
         <Tabs
             screenOptions={{
-                tabBarActiveTintColor: '#ffd33d',
-                headerStyle: { backgroundColor: '#25292e' },
-                headerShadowVisible: false,
-                headerTintColor: '#fff',
-                tabBarStyle: { backgroundColor: '#25292e' },
+                tabBarActiveTintColor: colors.primary,
+                tabBarInactiveTintColor: colors.textSecondary,
+                tabBarStyle: { 
+                    backgroundColor: colors.surface, 
+                    borderTopWidth: 1, 
+                    borderTopColor: colors.border,
+                    paddingTop: 4,
+                    paddingBottom: 4,
+                    height: 50,
+                },
+                tabBarLabelStyle: {
+                    ...getTypography(colors).label,
+                    fontSize: 10,
+                    marginTop: 0,
+                },
+                headerShown: false,
             }}
         >
             <Tabs.Screen
@@ -32,7 +45,7 @@ export default function TabLayout() {
                 options={{
                     title: 'Teams',
                     tabBarIcon: ({ color, focused }) => (
-                        <Ionicons name={focused ? 'shield' : 'shield-outline'} color={color} size={24} />
+                        <Ionicons name={focused ? 'grid' : 'grid-outline'} color={color} size={22} />
                     )
                 }} />
             <Tabs.Screen
@@ -40,7 +53,7 @@ export default function TabLayout() {
                 options={{
                     title: 'Profile',
                     tabBarIcon: ({ color, focused }) => (
-                        <Ionicons name={focused ? 'person' : 'person-outline'} color={color} size={24} />
+                        <Ionicons name={focused ? 'person' : 'person-outline'} color={color} size={22} />
                     )
                 }} />
         </Tabs>

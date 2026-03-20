@@ -33,6 +33,11 @@ export const useGame = (gameId?: string) => {
             // 1. Push current state to Undo Stack (locally)
             setUndoStack((prevStack) => [...prevStack, prevState]);
 
+            // Strip undefined values from details to prevent Firebase crashes
+            const cleanDetails = Object.fromEntries(
+                Object.entries(details).filter(([_, v]) => v !== undefined)
+            );
+
             // 2. Create Event
             const newEvent: GameEvent = {
                 id: Date.now().toString(), // Simple ID for now
@@ -40,7 +45,7 @@ export const useGame = (gameId?: string) => {
                 type,
                 timestamp: Date.now(),
                 teamId: prevState.possession, // Default to possession team? Or pass in?
-                ...details
+                ...cleanDetails
             };
 
             // 3. Calculate New State
@@ -74,7 +79,7 @@ export const useGame = (gameId?: string) => {
         }
     }, [undoStack]);
 
-    const startGame = async (team1Id: string, team2Id: string, team2Name: string, gameTarget: number, initialPossession: string) => {
+    const startGame = async (team1Id: string, team2Id: string, team2Name: string, gameTarget: number, initialPossession: string, advancedTracking: boolean = false, sotgEnabled: boolean = false) => {
         const newGameRef = push(ref(db, 'games'));
         const newGameId = newGameRef.key;
 
@@ -89,7 +94,9 @@ export const useGame = (gameId?: string) => {
             possession: initialPossession,
             firstHalfPossession: initialPossession,
             gameTarget,
-            isGameActive: true
+            isGameActive: true,
+            advancedTracking,
+            sotgEnabled
         };
 
         await set(newGameRef, initialState);
@@ -105,15 +112,19 @@ export const useGame = (gameId?: string) => {
         return newGameId;
     };
 
-    const endGame = async (gameId: string) => {
+    const endGame = async (gameId: string, sotgScore?: any) => {
         const gameRef = ref(db, `games/${gameId}`);
-        await update(gameRef, { isGameActive: false });
+        const updates: any = { isGameActive: false };
+        if (sotgScore) updates.sotgScore = sotgScore;
+        await update(gameRef, updates);
         
-        // Re-read local state to turn off activeGameId hooks
+        // Save to Team's pastGames node
         if (gameState.team1Id) {
+            await set(ref(db, `teams/${gameState.team1Id}/pastGames/${gameId}`), true);
             TeamService.setActiveGame(gameState.team1Id, null);
         }
         if (gameState.team2Id) {
+            await set(ref(db, `teams/${gameState.team2Id}/pastGames/${gameId}`), true);
             TeamService.setActiveGame(gameState.team2Id, null);
         }
     };
