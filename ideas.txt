@@ -63,3 +63,25 @@ passing, assists?
 Callahan switch pos?
 
 If ending game before score reached, prompt
+
+tournament bracket creator
+player stats on team page list?
+
+AI features, AI integration on data
+Spectator more features, emojis or something
+
+competition
+
+computer Vision
+specate big games championships etc
+forgot password
+spectator view not showing who is passing, team names
+
+Live Activities (Lock Screen Stats): Use iOS/Android APIs so spectators see the live score and "last event" on their lock screen without opening the app.
+Social "Box Score" Generator: One tap to generate a professional graphic (e.g., "Phoenix 15 - 13 Seattle | MVP: Damien") that coaches can post directly to Instagram/Twitter.
+The "Bench Hand-off": A button that allows the coach to instantly transfer "Recording Permissions" to any player currently on the bench so they can take over the tracking.
+Virtual "Hype" / Haptics: A "Cheer" button for fans at home. If 20 people tap it at once, the coach's phone (or a connected smartwatch) gives a specific haptic vibration.
+Chemistry Matrix: An AI-driven stat that shows which pairs of players are most effective together (e.g., "Player A completes 92% of throws to Player B").
+Availability & RSVP (The Calendar): You mentioned this might not be useful, but for a coach, it's the #1 stressor. A simple "In/Out" for practices and games saves dozens of texts.
+
+Better stats, better map, 

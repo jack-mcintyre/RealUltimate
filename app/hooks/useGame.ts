@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { db } from '../../firebaseConfig';
 import { GameLogic } from '../services/GameLogic';
 import { TeamService } from '../services/TeamService';
+import { InteractionService } from '../services/InteractionService';
 import { EventType, GameEvent, GameState, INITIAL_GAME_STATE } from '../services/types';
 
 export const useGame = (gameId?: string) => {
@@ -17,10 +18,6 @@ export const useGame = (gameId?: string) => {
         const unsubscribe = onValue(gameRef, (snapshot) => {
             const data = snapshot.val();
             if (data) {
-                // Hydrate state from history if needed, or just trust the snapshot if we store full state
-                // For now, let's assume we store the full state in Firebase as 'currentState'
-                // But better pattern might be to store events and rebuild? 
-                // For MVP low latency, storing state is faster for readers.
                 setGameState(data);
             }
         });
@@ -38,23 +35,39 @@ export const useGame = (gameId?: string) => {
                 Object.entries(details).filter(([_, v]) => v !== undefined)
             );
 
+            // Calculate game elapsed seconds for timestamp bookmarks
+            const gameElapsedSec = prevState.gameStartTimestamp && prevState.gameStartTimestamp > 0
+                ? Math.floor((Date.now() - prevState.gameStartTimestamp) / 1000)
+                : 0;
+
             // 2. Create Event
             const newEvent: GameEvent = {
-                id: Date.now().toString(), // Simple ID for now
+                id: Date.now().toString(),
                 gameId: prevState.gameId,
                 type,
                 timestamp: Date.now(),
-                teamId: prevState.possession, // Default to possession team? Or pass in?
+                teamId: prevState.possession,
+                gameElapsedSec,
                 ...cleanDetails
             };
 
             // 3. Calculate New State
             const newState = GameLogic.applyEvent(prevState, newEvent);
 
-            // 4. Persist to Firebase (if online/gameId exists)
+            // 4. Persist to Firebase 
             if (prevState.gameId) {
                 const gameRef = ref(db, `games/${prevState.gameId}`);
                 update(gameRef, newState);
+            }
+
+            // 5. Save prediction snapshot on scoring events (for the replay prediction chart)
+            if (type === 'G' || type === 'Goal' || type === 'Opponent Score' || type === 'Callahan_US' || type === 'Callahan_THEM') {
+                InteractionService.savePredictionSnapshot(
+                    prevState.gameId,
+                    newState.score1,
+                    newState.score2,
+                    prevState.gameStartTimestamp || 0
+                ).catch(() => { /* non-critical */ });
             }
 
             return newState;
@@ -79,11 +92,25 @@ export const useGame = (gameId?: string) => {
         }
     }, [undoStack]);
 
-    const startGame = async (team1Id: string, team2Id: string, team2Name: string, gameTarget: number, initialPossession: string, advancedTracking: boolean = false, sotgEnabled: boolean = false) => {
+    const startGame = async (
+        team1Id: string,
+        team2Id: string,
+        team2Name: string,
+        gameTarget: number,
+        initialPossession: string,
+        advancedTracking: boolean = false,
+        sotgEnabled: boolean = false,
+        streamUrl: string = '',
+        fieldMapEnabled: boolean = false,
+        recorderId?: string,
+    ) => {
         const newGameRef = push(ref(db, 'games'));
         const newGameId = newGameRef.key;
 
         if (!newGameId) return null;
+
+        // Generate a 4-digit PIN for bench hand-off
+        const recorderPin = Math.floor(1000 + Math.random() * 9000).toString();
 
         const initialState: GameState = {
             ...INITIAL_GAME_STATE,
@@ -96,14 +123,18 @@ export const useGame = (gameId?: string) => {
             gameTarget,
             isGameActive: true,
             advancedTracking,
-            sotgEnabled
+            fieldMapEnabled,
+            sotgEnabled,
+            streamUrl,
+            gameStartTimestamp: Date.now(),
+            currentRecorderId: recorderId || '',
+            recorderPin,
         };
 
         await set(newGameRef, initialState);
         setGameState(initialState);
         
-        // Mark teams as active. 
-        // We only set this for the main team because Opponent teams might be completely temporary Guest names
+        // Mark teams as active
         TeamService.setActiveGame(team1Id, newGameId);
         if (team2Id) {
             TeamService.setActiveGame(team2Id, newGameId);
@@ -129,12 +160,20 @@ export const useGame = (gameId?: string) => {
         }
     };
 
+    // Hand-off recording to another user
+    const handOffRecording = async (newRecorderId: string) => {
+        if (!gameState.gameId) return;
+        const gameRef = ref(db, `games/${gameState.gameId}`);
+        await update(gameRef, { currentRecorderId: newRecorderId });
+    };
+
     return {
         gameState,
         recordEvent,
         undo,
         canUndo: undoStack.length > 0,
         startGame,
-        endGame
+        endGame,
+        handOffRecording,
     };
 };

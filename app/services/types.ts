@@ -50,6 +50,12 @@ export type EventType =
   | 'Timeout'
   | 'Pass'; // Advanced tracking: when a player passes to another
 
+// Field coordinates for premium tracking (field map input)
+export interface FieldCoordinate {
+  x: number; // 0-100 percentage across field width (0=left sideline, 100=right sideline)
+  y: number; // 0-100 percentage across field length (0=our endzone, 100=their endzone)
+}
+
 export interface GameEvent {
   id: string; // Unique ID for event
   gameId: string;
@@ -59,6 +65,34 @@ export interface GameEvent {
   playerId?: string;
   assistPlayerId?: string; // Player who threw the assist
   timeElapsedMs?: number; // Time spent on a pass/possession
+  fieldPosition?: FieldCoordinate; // Premium field map tracking
+  gameElapsedSec?: number; // Seconds since game start (for timestamp bookmarks)
+}
+
+// Spectator emoji reactions
+export interface SpectatorReaction {
+  id: string;
+  emoji: string;
+  userId: string;
+  timestamp: number;
+}
+
+// Live prediction vote
+export interface PredictionVote {
+  team1Votes: number;
+  team2Votes: number;
+  voters: Record<string, string>; // userId -> teamId they voted for
+  snapshots?: PredictionSnapshot[]; // Historical snapshots for replay chart
+}
+
+export interface PredictionSnapshot {
+  timestamp: number;
+  gameElapsedSec: number;
+  team1Pct: number;
+  team2Pct: number;
+  totalVotes: number;
+  score1: number;
+  score2: number;
 }
 
 export interface GameState {
@@ -76,6 +110,7 @@ export interface GameState {
   playerStats: Record<string, PlayerStats>;
   history?: GameEvent[];
   advancedTracking?: boolean; // If true, tracks passing & possession time
+  fieldMapEnabled?: boolean; // If true, premium field map input is enabled
   sotgEnabled?: boolean;
   sotgScore?: {
     rules: number;
@@ -84,6 +119,11 @@ export interface GameState {
     attitude: number;
     communication: number;
   };
+  streamUrl?: string; // Optional livestreaming URL (Twitch/YouTube)
+  gameStartTimestamp?: number; // Epoch ms when game started (for timestamp bookmarks)
+  currentRecorderId?: string; // UID of person currently recording (for bench hand-off)
+  recorderPin?: string; // 4-digit PIN for bench hand-off
+  predictions?: PredictionVote; // Live spectator predictions
 }
 
 export const INITIAL_GAME_STATE: GameState = {
@@ -100,5 +140,10 @@ export const INITIAL_GAME_STATE: GameState = {
   playerStats: {},
   history: [],
   advancedTracking: false,
-  sotgEnabled: false
+  fieldMapEnabled: false,
+  sotgEnabled: false,
+  streamUrl: '',
+  gameStartTimestamp: 0,
+  currentRecorderId: '',
+  recorderPin: '',
 };

@@ -1,10 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, router } from 'expo-router';
 import React, { useEffect, useState, useRef } from 'react';
-import { Alert, Animated, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, TouchableWithoutFeedback, Switch, Modal } from 'react-native';
+import { Alert, Animated, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, TouchableWithoutFeedback, Switch, Modal, Dimensions } from 'react-native';
 import { useGame } from '../../hooks/useGame';
 import { TeamService } from '../../services/TeamService';
-import { Team, EventType } from '../../services/types';
+import { Team, EventType, FieldCoordinate } from '../../services/types';
 import { auth } from '../../../firebaseConfig';
 import { getTypography, Layout } from '../../theme/DesignSystem';
 import { useTheme, ThemeColors } from '../../theme/ThemeContext';
@@ -55,6 +55,123 @@ const TactileButton = ({
     );
 };
 
+// --- Field Map Inline Component (Premium Input) - HORIZONTAL ---
+const FieldMap = ({
+    coord,
+    onLocationSelect,
+    colors,
+    ourTeamName,
+    oppTeamName,
+}: {
+    coord: FieldCoordinate | null;
+    onLocationSelect: (coord: FieldCoordinate) => void;
+    colors: ThemeColors;
+    ourTeamName: string;
+    oppTeamName: string;
+}) => {
+    const [fieldLayout, setFieldLayout] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+
+    const handleFieldPress = (event: any) => {
+        // Use pageX/pageY relative to the field element via onLayout dimensions
+        const { locationX, locationY, offsetX, offsetY } = event.nativeEvent;
+        // Web uses offsetX/Y, Native uses locationX/Y
+        const locX = offsetX !== undefined ? offsetX : locationX;
+        const locY = offsetY !== undefined ? offsetY : locationY;
+        
+        const { width, height } = fieldLayout;
+        
+        if (width === 0 || height === 0 || locX === undefined || locY === undefined) return;
+        
+        // Horizontal field: x = across the length (left=their endzone, right=our endzone)
+        // y = across the width (top=sideline, bottom=sideline)
+        const rawX = Math.round((locX / width) * 100);
+        const rawY = Math.round((locY / height) * 100);
+        const newCoord = { 
+            x: Math.max(0, Math.min(100, rawX)), 
+            y: Math.max(0, Math.min(100, rawY)) 
+        };
+        
+        // Safety check to ensure we never set NaN
+        if (isNaN(newCoord.x) || isNaN(newCoord.y)) return;
+        
+        onLocationSelect(newCoord);
+    };
+
+    return (
+        <View style={{ width: '100%', marginBottom: 16 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <Text style={{ ...getTypography(colors).label, fontSize: 13, letterSpacing: 1, marginBottom: 0 }}>FIELD MAP</Text>
+                {coord && (
+                    <TouchableOpacity onPress={() => onLocationSelect({ x: -1, y: -1 })}>
+                        <Text style={{ ...getTypography(colors).bodySmall, color: colors.error, fontWeight: 'bold' }}>Clear Marker</Text>
+                    </TouchableOpacity>
+                )}
+            </View>
+            {/* HORIZONTAL field — left = their endzone, right = our endzone */}
+            <TouchableOpacity 
+                activeOpacity={1} 
+                onPress={handleFieldPress}
+                onLayout={(e) => setFieldLayout({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })}
+                style={{
+                    width: '100%',
+                    height: 200,
+                    backgroundColor: '#15803d',
+                    borderRadius: Layout.radiusMd,
+                    overflow: 'hidden',
+                    borderWidth: 2,
+                    borderColor: '#166534',
+                    position: 'relative',
+                }}
+            >
+                {/* pointerEvents="none" ensures that tapping on lines/labels doesn't mess up locationX coordinates */}
+                <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+                    {/* Endzone lines (vertical) */}
+                    <View style={{ position: 'absolute', left: '18%', top: 0, bottom: 0, width: 2, backgroundColor: 'rgba(255,255,255,0.5)' }} />
+                    <View style={{ position: 'absolute', left: '82%', top: 0, bottom: 0, width: 2, backgroundColor: 'rgba(255,255,255,0.5)' }} />
+                    {/* Midfield (vertical center line) */}
+                    <View style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 2, backgroundColor: 'rgba(255,255,255,0.3)' }} />
+                    {/* Sidelines (horizontal) */}
+                    <View style={{ position: 'absolute', left: 0, right: 0, top: '8%', height: 2, backgroundColor: 'rgba(255,255,255,0.3)' }} />
+                    <View style={{ position: 'absolute', left: 0, right: 0, bottom: '8%', height: 2, backgroundColor: 'rgba(255,255,255,0.3)' }} />
+                    
+                    {/* Endzone labels (flipped to face outwards) */}
+                    <View style={{ position: 'absolute', left: 0, width: '18%', top: 0, bottom: 0, justifyContent: 'center', alignItems: 'center' }}>
+                        <View style={{ width: 190, transform: [{ rotate: '-90deg' }] }}>
+                            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16, fontWeight: 'bold', letterSpacing: 2, textAlign: 'center' }} adjustsFontSizeToFit numberOfLines={1}>{oppTeamName.toUpperCase()}</Text>
+                        </View>
+                    </View>
+                    <View style={{ position: 'absolute', right: 0, width: '18%', top: 0, bottom: 0, justifyContent: 'center', alignItems: 'center' }}>
+                         <View style={{ width: 190, transform: [{ rotate: '90deg' }] }}>
+                            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16, fontWeight: 'bold', letterSpacing: 2, textAlign: 'center' }} adjustsFontSizeToFit numberOfLines={1}>{ourTeamName.toUpperCase()}</Text>
+                        </View>
+                    </View>
+
+                    {/* Tap marker */}
+                    {coord && coord.x !== -1 && (
+                        <View style={{
+                            position: 'absolute',
+                            left: `${coord.x}%`,
+                            top: `${coord.y}%`,
+                            width: 22,
+                            height: 22,
+                            borderRadius: 11,
+                            backgroundColor: '#FACC15',
+                            borderWidth: 3,
+                            borderColor: '#fff',
+                            marginLeft: -11,
+                            marginTop: -11,
+                            shadowColor: '#FACC15',
+                            shadowOpacity: 0.8,
+                            shadowRadius: 8,
+                            elevation: 6,
+                        }} />
+                    )}
+                </View>
+            </TouchableOpacity>
+        </View>
+    );
+};
+
 export default function RecorderScreen() {
     const { teamId } = useLocalSearchParams<{ teamId: string }>();
     const { colors } = useTheme();
@@ -66,13 +183,15 @@ export default function RecorderScreen() {
     const [opponentTeam, setOpponentTeam] = useState<Team | null>(null);
 
     const [selectedPlayer, setSelectedPlayer] = useState<string | null>(null);
-    const { gameState, recordEvent, undo, canUndo, startGame, endGame } = useGame(ourTeam?.activeGameId || undefined);
+    const { gameState, recordEvent, undo, canUndo, startGame, endGame, handOffRecording } = useGame(ourTeam?.activeGameId || undefined);
 
     const [activeLineup, setActiveLineup] = useState<string[]>([]);
 
-    // --- Advanced Tracking State ---
+    // --- Setup State ---
     const [advancedTrackingSetup, setAdvancedTrackingSetup] = useState(false);
+    const [fieldMapSetup, setFieldMapSetup] = useState(false);
     const [sotgEnabledSetup, setSotgEnabledSetup] = useState(false);
+    const [streamUrlSetup, setStreamUrlSetup] = useState('');
     const [showSotgModal, setShowSotgModal] = useState(false);
     const [sotgForm, setSotgForm] = useState({ rules: 2, fouls: 2, fairness: 2, attitude: 2, communication: 2 });
     
@@ -80,6 +199,27 @@ export default function RecorderScreen() {
     const [discHolderId, setDiscHolderId] = useState<string | null>(null);
     const [prevHolderId, setPrevHolderId] = useState<string | null>(null);
     const [possessionStartTime, setPossessionStartTime] = useState<number | 0>(0);
+
+    // Field Map
+    const [pendingFieldCoord, setPendingFieldCoord] = useState<FieldCoordinate | null>(null);
+
+    // Bench Hand-off
+    const [showHandoffModal, setShowHandoffModal] = useState(false);
+    const [handoffPinInput, setHandoffPinInput] = useState('');
+    const [showMultiRecorderWarning, setShowMultiRecorderWarning] = useState(false);
+
+    // Check if current user is the active recorder
+    const currentUserId = auth.currentUser?.uid;
+    const isActiveRecorder = !gameState.currentRecorderId || gameState.currentRecorderId === currentUserId;
+
+    // Show multi-recorder warning if someone else is recording
+    useEffect(() => {
+        if (gameState.isGameActive && gameState.currentRecorderId && currentUserId && gameState.currentRecorderId !== currentUserId) {
+            setShowMultiRecorderWarning(true);
+        } else {
+            setShowMultiRecorderWarning(false);
+        }
+    }, [gameState.currentRecorderId, currentUserId, gameState.isGameActive]);
 
     // Sync selected player visually with disc holder if tracking is on
     useEffect(() => {
@@ -89,20 +229,18 @@ export default function RecorderScreen() {
     }, [discHolderId, gameState.possession, gameState.advancedTracking, gameState.isGameActive]);
 
     const handlePlayerPress = (playerId: string) => {
-        // Basic Mode or Not Active
         if (!gameState.isGameActive || !gameState.advancedTracking || gameState.possession !== ourTeam?.id) {
             setSelectedPlayer(playerId);
             return;
         }
         
-        // Advanced Tracking Logic (Our Possession)
         if (!discHolderId) {
             setDiscHolderId(playerId);
             setPossessionStartTime(Date.now());
         } else if (discHolderId !== playerId) {
-            // PASS! (From discHolder to playerId)
             const timeElapsedMs = possessionStartTime ? Date.now() - possessionStartTime : 0;
-            recordEvent('Pass', { playerId: discHolderId, timeElapsedMs });
+            recordEvent('Pass', { playerId: discHolderId, timeElapsedMs, fieldPosition: pendingFieldCoord || undefined });
+            setPendingFieldCoord(null);
             
             setPrevHolderId(discHolderId);
             setDiscHolderId(playerId);
@@ -128,7 +266,6 @@ export default function RecorderScreen() {
         triggerGoalAnimation(type === 'Opponent Score' || type === 'Callahan_THEM' ? 'THEM' : 'US');
     };
 
-    // Unified Action Handler for Tactile Board
     const handleAction = (type: EventType) => {
         const timeElapsedMs = possessionStartTime ? Date.now() - possessionStartTime : 0;
 
@@ -136,21 +273,22 @@ export default function RecorderScreen() {
             handleGoal('G', { 
                 playerId: selectedPlayer, 
                 assistPlayerId: gameState.advancedTracking ? prevHolderId : undefined,
-                timeElapsedMs 
+                timeElapsedMs,
+                fieldPosition: pendingFieldCoord || undefined,
             });
         } else if (type === 'Callahan_US' || type === 'Callahan_THEM' || type === 'Opponent Score') {
-            handleGoal(type, { playerId: selectedPlayer });
+            handleGoal(type, { playerId: selectedPlayer, fieldPosition: pendingFieldCoord || undefined });
         } else {
-            recordEvent(type, { playerId: selectedPlayer, timeElapsedMs });
+            recordEvent(type, { playerId: selectedPlayer, timeElapsedMs, fieldPosition: pendingFieldCoord || undefined });
         }
 
-        // Reset advanced tracking
+        setPendingFieldCoord(null);
+
         if (gameState.advancedTracking) {
              setDiscHolderId(null);
              setPrevHolderId(null);
              setPossessionStartTime(0);
         } else {
-            // Unconditionally deselect player in basic mode after any action to prevent ghost attribution on next point
             setSelectedPlayer(null);
         }
     };
@@ -222,7 +360,11 @@ export default function RecorderScreen() {
             const initialPossessionId = firstPossession === 'US' ? ourTeam.id : oppTeamId;
             const oppNameForGuest = opponentName.trim() ? opponentName.trim() : '';
 
-            await startGame(ourTeam.id, oppTeamId, oppNameForGuest, gameTarget, initialPossessionId, advancedTrackingSetup, sotgEnabledSetup);
+            await startGame(
+                ourTeam.id, oppTeamId, oppNameForGuest, gameTarget, initialPossessionId, 
+                advancedTrackingSetup, sotgEnabledSetup, streamUrlSetup, fieldMapSetup,
+                currentUser.uid
+            );
 
         } catch (e) {
             console.error(e);
@@ -287,6 +429,17 @@ export default function RecorderScreen() {
         router.replace({ pathname: '/game/history/[gameId]', params: { gameId: gameState.gameId, newGame: 'true' } });
     };
 
+    const handleHandoff = async () => {
+        if (handoffPinInput === gameState.recorderPin) {
+            await handOffRecording(currentUserId || '');
+            setShowHandoffModal(false);
+            setHandoffPinInput('');
+            Alert.alert("Success", "You are now the active recorder!");
+        } else {
+            Alert.alert("Invalid PIN", "The PIN you entered does not match.");
+        }
+    };
+
     if (!ourTeam) return <View style={styles.centerContainer}><Text style={{color: colors.text}}>Loading...</Text></View>;
 
     const isGameOver = gameState.score1 >= gameState.gameTarget || gameState.score2 >= gameState.gameTarget;
@@ -301,8 +454,22 @@ export default function RecorderScreen() {
                 <Text style={styles.topAppBarTitle} numberOfLines={1}>
                     {gameState.isGameActive ? `vs ${opponentTeam ? opponentTeam.name : (gameState.team2Name || opponentName || 'Opponent')}` : 'Game Setup'}
                 </Text>
-                <View style={{ width: 40 }} />
+                {gameState.isGameActive ? (
+                    <TouchableOpacity style={styles.handoffBtn} onPress={() => setShowHandoffModal(true)}>
+                        <Ionicons name="swap-horizontal" size={20} color={colors.primary} />
+                    </TouchableOpacity>
+                ) : (
+                    <View style={{ width: 40 }} />
+                )}
             </View>
+
+            {/* Multi-Recorder Warning Banner */}
+            {showMultiRecorderWarning && (
+                <View style={styles.warningBanner}>
+                    <Ionicons name="warning" size={20} color="#92400E" />
+                    <Text style={styles.warningText}>Another person is actively recording this game. Avoid duplicating events.</Text>
+                </View>
+            )}
 
             <ScrollView style={styles.mainContent} contentContainerStyle={{ paddingBottom: 60 }} showsVerticalScrollIndicator={false}>
                 
@@ -317,6 +484,10 @@ export default function RecorderScreen() {
                         <Text style={styles.dividerText}>or unregistered guest</Text>
                         <Text style={styles.inputLabel}>GUEST TEAM NAME</Text>
                         <TextInput style={styles.input} placeholder="e.g. Rival University" placeholderTextColor={colors.textSecondary} value={opponentName} onChangeText={setOpponentName} />
+                        <View style={styles.setupDivider} />
+                        
+                        <Text style={styles.inputLabel}>LIVESTREAM URL (OPTIONAL)</Text>
+                        <TextInput style={styles.input} placeholder="e.g. YouTube or Twitch Link" placeholderTextColor={colors.textSecondary} value={streamUrlSetup} onChangeText={setStreamUrlSetup} autoCapitalize="none" keyboardType="url" />
                         <View style={styles.setupDivider} />
                         
                         <View style={styles.settingsRow}>
@@ -337,13 +508,24 @@ export default function RecorderScreen() {
                         </View>
 
                         <View style={styles.setupDivider} />
+
+                        {/* Feature Toggles */}
                         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
                             <View style={{flex: 1, paddingRight: 16}}>
                                 <Text style={[styles.inputLabel, {marginBottom: 2}]}>ADVANCED TRACKING</Text>
-                                <Text style={[styles.dividerText, {textAlign: 'left', marginTop: 0}]}>Track passes, time-of-possession, and automatic assists by selecting disc holders.</Text>
+                                <Text style={[styles.dividerText, {textAlign: 'left', marginTop: 0}]}>Track passes, time-of-possession, and automatic assists.</Text>
                             </View>
                             <Switch value={advancedTrackingSetup} onValueChange={setAdvancedTrackingSetup} trackColor={{ false: colors.border, true: colors.primary }} />
                         </View>
+
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                            <View style={{flex: 1, paddingRight: 16}}>
+                                <Text style={[styles.inputLabel, {marginBottom: 2}]}>FIELD MAP (PREMIUM)</Text>
+                                <Text style={[styles.dividerText, {textAlign: 'left', marginTop: 0}]}>Record play positions on a visual field. Best for bench trackers.</Text>
+                            </View>
+                            <Switch value={fieldMapSetup} onValueChange={setFieldMapSetup} trackColor={{ false: colors.border, true: '#7E22CE' }} />
+                        </View>
+
                         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
                             <View style={{flex: 1, paddingRight: 16}}>
                                 <Text style={[styles.inputLabel, {marginBottom: 2}]}>SPIRIT SCORE (0-4 WFDF)</Text>
@@ -358,7 +540,7 @@ export default function RecorderScreen() {
                     <View style={{ flex: 1 }}>
                         <View style={styles.scoreboard}>
                             <View style={styles.scoreBox}>
-                                <Text style={styles.scoreLabel}>US</Text>
+                                <Text style={styles.scoreLabel}>{ourTeam?.name?.toUpperCase() || 'US'}</Text>
                                 <View style={styles.scoreNumberContainer}>
                                     {goalSide === 'US' && (
                                         <Animated.View style={[styles.fireworks, { opacity: goalAnim, transform: [{ scale: goalAnim }] }]}>
@@ -370,7 +552,7 @@ export default function RecorderScreen() {
                             </View>
                             <View style={styles.scoreDivider} />
                             <View style={styles.scoreBox}>
-                                <Text style={styles.scoreLabel}>THEM</Text>
+                                <Text style={styles.scoreLabel}>{(opponentTeam?.name || gameState.team2Name || opponentName || 'OPPONENT').toUpperCase()}</Text>
                                 <View style={styles.scoreNumberContainer}>
                                     {goalSide === 'THEM' && (
                                         <Animated.View style={[styles.fireworks, { opacity: goalAnim, transform: [{ scale: goalAnim }] }]}>
@@ -384,7 +566,7 @@ export default function RecorderScreen() {
 
                         <View style={[styles.possessionIndicator, { backgroundColor: gameState.possession === ourTeam?.id ? colors.primaryLight : colors.errorBg }]}>
                             <Text style={[styles.possessionIndicatorText, { color: gameState.possession === ourTeam?.id ? colors.primary : colors.error }]}>
-                                {gameState.possession === ourTeam?.id ? '▶ OUR POSSESSION' : '◀ OPPONENT POSSESSION'}
+                                {gameState.possession === ourTeam?.id ? `▶ ${ourTeam?.name || 'Our'} Possession` : `◀ ${opponentTeam?.name || gameState.team2Name || opponentName || 'Opponent'} Possession`}
                             </Text>
                         </View>
 
@@ -455,6 +637,23 @@ export default function RecorderScreen() {
                             </ScrollView>
                         </View>
 
+                        {/* INLINE FIELD MAP (if enabled) */}
+                        {gameState.fieldMapEnabled && (
+                            <FieldMap 
+                                coord={pendingFieldCoord}
+                                onLocationSelect={(coord) => {
+                                    if (coord.x < 0 || coord.y < 0) {
+                                        setPendingFieldCoord(null);
+                                    } else {
+                                        setPendingFieldCoord(coord);
+                                    }
+                                }}
+                                colors={colors}
+                                ourTeamName={ourTeam?.name || 'Us'}
+                                oppTeamName={opponentTeam?.name || gameState.team2Name || opponentName || 'Opponent'}
+                            />
+                        )}
+
                         {/* ACTIONS */}
                         <View style={styles.actionPanel}>
                             <Text style={styles.sectionTitle}>TACTICAL ACTIONS</Text>
@@ -468,7 +667,6 @@ export default function RecorderScreen() {
                             ) : (
                                 gameState.possession === ourTeam?.id ? (
                                     <View style={styles.actionBoard}>
-                                        {/* OUR POSSESSION ACTION BOARD */}
                                         <View style={styles.actionBoardRow}>
                                             <TactileButton title="Goal" icon="aperture" color={colors.primary} disabled={!selectedPlayer} onPress={() => handleAction('G')} />
                                             <TactileButton title="Throwaway" icon="close-circle" color={colors.error} disabled={!selectedPlayer} onPress={() => handleAction('T')} />
@@ -480,7 +678,6 @@ export default function RecorderScreen() {
                                     </View>
                                 ) : (
                                     <View style={styles.actionBoard}>
-                                        {/* OPPONENT POSSESSION ACTION BOARD */}
                                         <View style={styles.actionBoardRow}>
                                             <TactileButton title="D-Block" icon="hand-left" color={colors.primary} disabled={!selectedPlayer} onPress={() => handleAction('D')} />
                                             <TactileButton title="Opp. Turnover" icon="sync" color={colors.success} onPress={() => handleAction('Opponent Turnover')} />
@@ -531,6 +728,18 @@ export default function RecorderScreen() {
                             ))}
                         </View>
 
+                        {/* Recorder PIN Info */}
+                        {gameState.recorderPin && isActiveRecorder && (
+                            <View style={styles.recorderPinCard}>
+                                <Ionicons name="key" size={18} color={colors.primary} />
+                                <View style={{ flex: 1, marginLeft: 12 }}>
+                                    <Text style={{ ...getTypography(colors).bodySmall, color: colors.text, fontWeight: '600' }}>Handoff PIN</Text>
+                                    <Text style={{ ...getTypography(colors).title, fontSize: 24, letterSpacing: 8, color: colors.primary }}>{gameState.recorderPin}</Text>
+                                </View>
+                                <Text style={{ ...getTypography(colors).bodySmall, maxWidth: 120, textAlign: 'right' }}>Share with a bench player to transfer recording</Text>
+                            </View>
+                        )}
+
                         <TouchableOpacity style={styles.endMatchBtn} onPress={confirmEndGame} activeOpacity={0.6}>
                             <Text style={styles.endMatchBtnText}>End Game & View Match Report</Text>
                         </TouchableOpacity>
@@ -538,6 +747,7 @@ export default function RecorderScreen() {
                 )}
             </ScrollView>
 
+            {/* SOTG MODAL */}
             <Modal visible={showSotgModal} animationType="slide" transparent={true}>
                 <View style={styles.modalOverlay}>
                     <View style={styles.sotgCard}>
@@ -581,6 +791,55 @@ export default function RecorderScreen() {
                     </View>
                 </View>
             </Modal>
+
+            {/* BENCH HAND-OFF MODAL */}
+            <Modal visible={showHandoffModal} animationType="fade" transparent={true}>
+                <View style={styles.modalOverlay}>
+                    <View style={[styles.sotgCard, { alignItems: 'center' }]}>
+                        <Ionicons name="swap-horizontal-outline" size={48} color={colors.primary} style={{ marginBottom: 16 }} />
+                        <Text style={[styles.sotgTitle, { marginBottom: 4 }]}>Bench Hand-off</Text>
+                        <Text style={[styles.sotgSubtitle, { marginBottom: 24 }]}>
+                            {isActiveRecorder 
+                                ? `Share the PIN below with a bench player to hand off recording duties.`
+                                : `Enter the PIN shown on the current recorder's screen to take over.`
+                            }
+                        </Text>
+
+                        {isActiveRecorder && gameState.recorderPin ? (
+                            <View style={{ alignItems: 'center', marginBottom: 24 }}>
+                                <Text style={{ ...getTypography(colors).label, marginBottom: 8 }}>YOUR HANDOFF PIN</Text>
+                                <Text style={{ ...getTypography(colors).title, fontSize: 40, letterSpacing: 12, color: colors.primary }}>{gameState.recorderPin}</Text>
+                            </View>
+                        ) : (
+                            <View style={{ width: '100%', marginBottom: 24 }}>
+                                <Text style={[styles.inputLabel, { textAlign: 'center' }]}>ENTER HANDOFF PIN</Text>
+                                <TextInput 
+                                    style={[styles.input, { textAlign: 'center', letterSpacing: 12, fontSize: 28, fontWeight: '700' }]} 
+                                    placeholder="0000" 
+                                    placeholderTextColor={colors.textSecondary} 
+                                    maxLength={4} 
+                                    keyboardType="number-pad" 
+                                    value={handoffPinInput} 
+                                    onChangeText={setHandoffPinInput} 
+                                />
+                                <TouchableOpacity 
+                                    style={[styles.startMatchBtn, { marginTop: 8 }]} 
+                                    onPress={handleHandoff}
+                                    activeOpacity={0.8}
+                                >
+                                    <Text style={styles.startMatchBtnText}>Take Over Recording</Text>
+                                </TouchableOpacity>
+                            </View>
+                        )}
+                        
+                        <TouchableOpacity style={styles.controlBtn} onPress={() => { setShowHandoffModal(false); setHandoffPinInput(''); }}>
+                            <Text style={styles.controlBtnText}>Close</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
+
+
         </KeyboardAvoidingView>
     );
 }
@@ -594,6 +853,11 @@ const getStyles = (colors: ThemeColors) => {
     topAppBar: { height: 60, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: Layout.padding, backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
     backButton: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginLeft: -8 },
     topAppBarTitle: { ...getTypography(colors).title, fontSize: 18, color: colors.text, flex: 1, textAlign: 'center' },
+    handoffBtn: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border },
+
+    // Warning banner
+    warningBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FEF3C7', paddingHorizontal: Layout.padding, paddingVertical: 12, gap: 10, borderBottomWidth: 1, borderBottomColor: '#FDE68A' },
+    warningText: { ...getTypography(colors).bodySmall, color: '#92400E', flex: 1, fontWeight: '500' },
 
     mainContent: { flex: 1, paddingHorizontal: Layout.padding, paddingTop: 24 },
     
@@ -629,6 +893,22 @@ const getStyles = (colors: ThemeColors) => {
     possessionIndicator: { paddingVertical: 12, borderRadius: Layout.radiusMd, marginBottom: 24, alignItems: 'center', borderWidth: 1, borderColor: colors.border },
     possessionIndicatorText: { ...getTypography(colors).body, fontWeight: '700' },
 
+    // Field Map Button
+    fieldMapBtn: { 
+        flexDirection: 'row', 
+        alignItems: 'center', 
+        justifyContent: 'center', 
+        backgroundColor: colors.surface, 
+        paddingVertical: 14, 
+        borderRadius: Layout.radiusMd, 
+        marginBottom: 16, 
+        borderWidth: 2, 
+        borderColor: '#7E22CE', 
+        borderStyle: 'dashed',
+        gap: 8,
+    },
+    fieldMapBtnText: { ...getTypography(colors).body, fontWeight: '600', color: '#7E22CE', fontSize: 14 },
+
     // Lineup Grid
     lineupSection: { marginBottom: 24 },
     playerGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 16 },
@@ -659,8 +939,22 @@ const getStyles = (colors: ThemeColors) => {
     lockedContainer: { alignItems: 'center', padding: 24, backgroundColor: colors.surfaceSecondary, borderRadius: Layout.radiusMd, marginBottom: 20 },
     lockedText: { ...getTypography(colors).bodySmall, marginTop: 12 },
 
+    // Recorder PIN Card
+    recorderPinCard: { 
+        flexDirection: 'row', 
+        alignItems: 'center', 
+        backgroundColor: colors.surface, 
+        padding: 16, 
+        borderRadius: Layout.radiusMd, 
+        marginBottom: 16, 
+        borderWidth: 1, 
+        borderColor: colors.primary,
+        borderStyle: 'dashed',
+        ...Layout.shadow 
+    },
+
     // Log
-    logCard: { marginBottom: 32, backgroundColor: colors.surface, padding: 16, borderRadius: Layout.radiusLg, borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
+    logCard: { marginBottom: 16, backgroundColor: colors.surface, padding: 16, borderRadius: Layout.radiusLg, borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
     logRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
     logText: { ...getTypography(colors).body, fontSize: 14, flex: 1 },
     logTime: { ...getTypography(colors).bodySmall, fontSize: 12 },
