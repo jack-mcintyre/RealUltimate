@@ -1,15 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, router } from 'expo-router';
-import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { ActivityIndicator, Animated, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, Linking, Dimensions } from 'react-native';
+import { router, useLocalSearchParams } from 'expo-router';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Animated, Dimensions, Linking, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { LiveFeedService } from '../../services/LiveFeedService';
-import { InteractionService } from '../../services/InteractionService';
-import { TeamService } from '../../services/TeamService';
-import { GameState, Team, SpectatorReaction } from '../../services/types';
-import { getTypography, Layout } from '../../theme/DesignSystem';
-import { useTheme, ThemeColors } from '../../theme/ThemeContext';
 import { auth } from '../../../firebaseConfig';
+import { InteractionService } from '../../services/InteractionService';
+import { LiveFeedService } from '../../services/LiveFeedService';
+import { TeamService } from '../../services/TeamService';
+import { GameState, Team } from '../../services/types';
+import { getTypography, Layout } from '../../theme/DesignSystem';
+import { ThemeColors, useTheme } from '../../theme/ThemeContext';
 
 const EMOJIS = ['🔥', '💪', '👏', '😱', '🥏', '⚡'];
 
@@ -93,6 +93,53 @@ const getOnFirePlayers = (history: any[]): string[] => {
     return Object.entries(playerCounts).filter(([_, count]) => count >= 3).map(([id]) => id);
 };
 
+const isValidCoord = (coord: any) => typeof coord?.x === 'number' && typeof coord?.y === 'number' && coord.x >= 0 && coord.y >= 0;
+
+const zoneValueFromX = (x: number) => {
+    const clamped = Math.max(0, Math.min(100, x));
+    const base = clamped / 100;
+    const redZoneBonus = clamped >= 82 ? 0.35 : 0;
+    const ownEndzonePenalty = clamped <= 18 ? -0.15 : 0;
+    return base + redZoneBonus + ownEndzonePenalty;
+};
+
+const getEventActors = (event: any) => {
+    const throwerId = event.fromPlayerId || event.assistPlayerId || (event.type === 'Pass' ? event.playerId : undefined);
+    const receiverId = event.toPlayerId || (event.assistPlayerId ? event.playerId : undefined);
+    return { throwerId, receiverId };
+};
+
+const classifyThrowProfile = (dx: number, dy: number, distance: number, toX: number) => {
+    if (toX >= 82 && distance >= 16) return 'Red Zone Attack';
+    if (distance >= 32 && dx >= 18) return 'Huck';
+    if (Math.abs(dy) >= 20) return 'Break';
+    if (distance <= 12) return 'Reset';
+    return 'Under';
+};
+
+const isChallengeEvent = (event: any) => [
+    'G',
+    'Goal',
+    'Callahan_US',
+    'Opponent Score',
+    'Callahan_THEM',
+    'Throwaway',
+    'T',
+    'Drop',
+    'Opponent Turnover',
+    'D',
+    'D-Block',
+].includes(event?.type);
+
+const challengeOutcomeFromEvent = (event: any) => {
+    if (!event) return null;
+    if (event.type === 'G' || event.type === 'Goal' || event.type === 'Callahan_US') return 'US_GOAL';
+    if (event.type === 'Opponent Score' || event.type === 'Callahan_THEM') return 'THEM_GOAL';
+    return 'TURNOVER';
+};
+
+const eventStableKey = (event: any) => `${event?.id || ''}-${event?.timestamp || ''}-${event?.type || ''}`;
+
 export default function LiveFeedScreen() {
     const { colors } = useTheme();
     const styles = getStyles(colors);
@@ -106,6 +153,9 @@ export default function LiveFeedScreen() {
 
     // Prediction state
     const [userVote, setUserVote] = useState<string | null>(null);
+    const [fanChallengePick, setFanChallengePick] = useState<'US_GOAL' | 'THEM_GOAL' | 'TURNOVER' | null>(null);
+    const [fanChallengeScore, setFanChallengeScore] = useState({ correct: 0, total: 0, lastResult: '' });
+    const challengeAnchorRef = useRef<string | null>(null);
 
     useEffect(() => {
         if (!teamId) return;
@@ -177,12 +227,44 @@ export default function LiveFeedScreen() {
         );
     }, [activeGame?.gameId, activeGame?.team1Id, activeGame?.team2Id]);
 
+    const handleFanChallengePick = useCallback((pick: 'US_GOAL' | 'THEM_GOAL' | 'TURNOVER') => {
+        const latest = [...(activeGame?.history || [])].reverse().find(isChallengeEvent);
+        challengeAnchorRef.current = latest ? eventStableKey(latest) : null;
+        setFanChallengePick(pick);
+    }, [activeGame?.history]);
+
+    useEffect(() => {
+        if (!fanChallengePick || !activeGame?.history?.length) return;
+
+        const latest = [...activeGame.history].reverse().find(isChallengeEvent);
+        if (!latest) return;
+
+        const latestKey = eventStableKey(latest);
+        if (latestKey === challengeAnchorRef.current) return;
+
+        const outcome = challengeOutcomeFromEvent(latest);
+        if (!outcome) return;
+
+        setFanChallengeScore((prev) => {
+            const correct = fanChallengePick === outcome;
+            return {
+                correct: prev.correct + (correct ? 1 : 0),
+                total: prev.total + 1,
+                lastResult: correct ? 'Correct read!' : `Missed: ${outcome.replace('_', ' ')}`,
+            };
+        });
+
+        setFanChallengePick(null);
+        challengeAnchorRef.current = latestKey;
+    }, [activeGame?.history, fanChallengePick]);
+
     const formatEventMessage = (event: any) => {
         const playerName = team?.players?.[event.playerId]?.name || 'Unknown Player';
         const assistName = team?.players?.[event.assistPlayerId]?.name;
         const time = new Date(event.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
         switch (event.type) {
+            case 'Pickup': return { icon: 'radio-button-on-outline', color: colors.primary, title: 'Pickup', desc: `${playerName} secured possession.`, time };
             case 'G': return { icon: 'disc-outline', color: colors.success, title: 'Goal', desc: `${playerName} scored${assistName ? ` (Assist: ${assistName})` : ''}.`, time };
             case 'Goal': return { icon: 'disc-outline', color: colors.success, title: 'Goal', desc: `${playerName} scored${assistName ? ` (Assist: ${assistName})` : ''}.`, time };
             case 'D': return { icon: 'hand-left-outline', color: colors.primary, title: 'Defense', desc: `Block by ${playerName}.`, time };
@@ -207,6 +289,83 @@ export default function LiveFeedScreen() {
     const totalVotes = (predictions?.team1Votes || 0) + (predictions?.team2Votes || 0);
     const team1Pct = totalVotes > 0 ? Math.round(((predictions?.team1Votes || 0) / totalVotes) * 100) : 50;
     const team2Pct = totalVotes > 0 ? 100 - team1Pct : 50;
+
+    const liveHistory = activeGame?.history || [];
+    const recentWindow = liveHistory.slice(-6);
+
+    let runSide: 'US' | 'THEM' | null = null;
+    let runCount = 0;
+    for (let i = liveHistory.length - 1; i >= 0; i--) {
+        const event = liveHistory[i];
+        const usScore = event.type === 'G' || event.type === 'Goal' || event.type === 'Callahan_US';
+        const themScore = event.type === 'Opponent Score' || event.type === 'Callahan_THEM';
+        if (!usScore && !themScore) continue;
+
+        const side: 'US' | 'THEM' = usScore ? 'US' : 'THEM';
+        if (!runSide) {
+            runSide = side;
+            runCount = 1;
+        } else if (runSide === side) {
+            runCount += 1;
+        } else {
+            break;
+        }
+    }
+
+    const turnoverEvents = recentWindow.filter((event) => [
+        'Throwaway',
+        'T',
+        'Drop',
+        'Opponent Turnover',
+        'D',
+        'D-Block',
+    ].includes(event.type)).length;
+
+    const scoreDiff = activeGame ? Math.abs(activeGame.score1 - activeGame.score2) : 0;
+    const target = activeGame?.gameTarget || 15;
+    const highLeverage = activeGame ? Math.max(activeGame.score1, activeGame.score2) >= Math.max(2, target - 4) : false;
+    const pressureIndex = Math.min(100, Math.max(20, (scoreDiff <= 2 ? 42 : 22) + (highLeverage ? 28 : 0) + (turnoverEvents * 7)));
+
+    let epvPulseTotal = 0;
+    let epvPulseSamples = 0;
+    const liveThrowProfiles: Record<string, number> = {};
+
+    liveHistory.forEach((event) => {
+        const { throwerId, receiverId } = getEventActors(event);
+        const isCompletion = event.type === 'Pass' || event.type === 'Goal' || event.type === 'G';
+        const isTurn = event.type === 'Throwaway' || event.type === 'T' || event.type === 'Drop';
+        if (!throwerId || !receiverId || !(isCompletion || isTurn)) return;
+        if (!isValidCoord(event.fromFieldPosition) || !isValidCoord(event.fieldPosition)) return;
+
+        const dx = event.fieldPosition.x - event.fromFieldPosition.x;
+        const dy = event.fieldPosition.y - event.fromFieldPosition.y;
+        const distance = Math.sqrt((dx * dx) + (dy * dy));
+        const profile = classifyThrowProfile(dx, dy, distance, event.fieldPosition.x);
+        liveThrowProfiles[profile] = (liveThrowProfiles[profile] || 0) + 1;
+
+        const delta = zoneValueFromX(event.fieldPosition.x) - zoneValueFromX(event.fromFieldPosition.x);
+        epvPulseTotal += delta;
+        epvPulseSamples += 1;
+    });
+
+    const epvPulse = epvPulseSamples > 0 ? epvPulseTotal / epvPulseSamples : 0;
+    const topLiveProfiles = Object.entries(liveThrowProfiles)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 2)
+        .map(([name, count]) => `${name} (${count})`);
+
+    const latestCoordEvent = [...liveHistory].reverse().find((event) => isValidCoord(event.fieldPosition));
+    const latestX = latestCoordEvent?.fieldPosition?.x;
+    let territoryAlert = 'Midfield balance';
+    if (typeof latestX === 'number') {
+        if (activeGame?.possession === activeGame?.team1Id && latestX >= 72) territoryAlert = `${team?.name || 'Us'} attacking red zone`;
+        if (activeGame?.possession !== activeGame?.team1Id && latestX >= 72) territoryAlert = 'Defensive red-zone alert';
+        if (activeGame?.possession === activeGame?.team1Id && latestX <= 30) territoryAlert = `${team?.name || 'Us'} pinned deep`;
+    }
+
+    const momentumText = runSide
+        ? `${runSide === 'US' ? (team?.name || 'Us') : (activeGame?.team2Name || 'Opponent')} on a ${runCount}-point run`
+        : 'No scoring run yet';
 
     if (team) {
         return (
@@ -325,6 +484,38 @@ export default function LiveFeedScreen() {
                                 </Text>
                             </View>
 
+                            {/* LIVE INTELLIGENCE LAYER */}
+                            <View style={styles.intelCard}>
+                                <View style={styles.intelHeader}>
+                                    <View style={styles.intelBadge}><Text style={styles.intelBadgeText}>AI</Text></View>
+                                    <Text style={styles.intelTitle}>Live Intelligence Layer</Text>
+                                </View>
+
+                                <View style={styles.intelGrid}>
+                                    <View style={styles.intelPill}>
+                                        <Text style={styles.intelLabel}>Momentum</Text>
+                                        <Text style={styles.intelValue} numberOfLines={2}>{momentumText}</Text>
+                                    </View>
+                                    <View style={styles.intelPill}>
+                                        <Text style={styles.intelLabel}>Pressure Index</Text>
+                                        <Text style={styles.intelValue}>{pressureIndex}</Text>
+                                    </View>
+                                </View>
+
+                                <View style={styles.intelGrid}>
+                                    <View style={styles.intelPill}>
+                                        <Text style={styles.intelLabel}>EPV Pulse</Text>
+                                        <Text style={[styles.intelValue, { color: epvPulse >= 0 ? colors.success : colors.error }]}>{epvPulse.toFixed(2)}</Text>
+                                    </View>
+                                    <View style={styles.intelPill}>
+                                        <Text style={styles.intelLabel}>Territory Alert</Text>
+                                        <Text style={styles.intelValue} numberOfLines={2}>{territoryAlert}</Text>
+                                    </View>
+                                </View>
+
+                                <Text style={styles.intelSubtext}>Top throw signatures: {topLiveProfiles.length ? topLiveProfiles.join(' • ') : 'Collecting data...'}</Text>
+                            </View>
+
                             {/* ON FIRE PLAYERS */}
                             {onFirePlayers.length > 0 && (
                                 <View style={styles.onFireCard}>
@@ -418,6 +609,43 @@ export default function LiveFeedScreen() {
                                         </View>
                                     </View>
                                 )}
+                            </View>
+
+                            {/* FAN CHALLENGE */}
+                            <View style={styles.challengeCard}>
+                                <Text style={{ ...getTypography(colors).label, marginBottom: 6 }}>FAN CHALLENGE</Text>
+                                <Text style={{ ...getTypography(colors).bodySmall, marginBottom: 12 }}>
+                                    Predict the next impact event. Your score updates live.
+                                </Text>
+
+                                <View style={styles.challengeRow}>
+                                    <TouchableOpacity
+                                        style={[styles.challengeBtn, fanChallengePick === 'US_GOAL' && { borderColor: colors.success, backgroundColor: colors.success }]}
+                                        onPress={() => handleFanChallengePick('US_GOAL')}
+                                        activeOpacity={0.75}
+                                    >
+                                        <Text style={[styles.challengeBtnText, fanChallengePick === 'US_GOAL' && { color: '#fff' }]}>Us Goal</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[styles.challengeBtn, fanChallengePick === 'THEM_GOAL' && { borderColor: colors.error, backgroundColor: colors.error }]}
+                                        onPress={() => handleFanChallengePick('THEM_GOAL')}
+                                        activeOpacity={0.75}
+                                    >
+                                        <Text style={[styles.challengeBtnText, fanChallengePick === 'THEM_GOAL' && { color: '#fff' }]}>Opp Goal</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[styles.challengeBtn, fanChallengePick === 'TURNOVER' && { borderColor: colors.primary, backgroundColor: colors.primary }]}
+                                        onPress={() => handleFanChallengePick('TURNOVER')}
+                                        activeOpacity={0.75}
+                                    >
+                                        <Text style={[styles.challengeBtnText, fanChallengePick === 'TURNOVER' && { color: '#fff' }]}>Turnover</Text>
+                                    </TouchableOpacity>
+                                </View>
+
+                                <Text style={styles.challengeScore}>
+                                    Score: {fanChallengeScore.correct}/{fanChallengeScore.total}
+                                    {fanChallengeScore.lastResult ? ` • ${fanChallengeScore.lastResult}` : ''}
+                                </Text>
                             </View>
 
                             {/* PLAY BY PLAY FEED */}
@@ -591,6 +819,65 @@ const getStyles = (colors: ThemeColors) => {
     predBarLeft: { backgroundColor: colors.primary, borderTopLeftRadius: Layout.radiusSm, borderBottomLeftRadius: Layout.radiusSm },
     predBarRight: { backgroundColor: colors.error, borderTopRightRadius: Layout.radiusSm, borderBottomRightRadius: Layout.radiusSm },
     predBarText: { color: '#fff', fontWeight: 'bold', fontSize: 12 },
+
+    // Live intelligence
+    intelCard: {
+        backgroundColor: colors.surface,
+        borderRadius: Layout.radiusLg,
+        padding: 18,
+        marginBottom: 16,
+        borderWidth: 1,
+        borderColor: colors.border,
+        ...Layout.shadow,
+    },
+    intelHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+    intelBadge: {
+        backgroundColor: colors.primary,
+        borderRadius: 10,
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+        marginRight: 8,
+    },
+    intelBadgeText: { color: '#fff', fontSize: 10, fontWeight: '700', letterSpacing: 0.8 },
+    intelTitle: { ...getTypography(colors).body, fontWeight: '700' },
+    intelGrid: { flexDirection: 'row', gap: 10, marginBottom: 8 },
+    intelPill: {
+        flex: 1,
+        backgroundColor: colors.surfaceSecondary,
+        borderRadius: Layout.radiusMd,
+        paddingVertical: 9,
+        paddingHorizontal: 10,
+        borderWidth: 1,
+        borderColor: colors.border,
+        minHeight: 62,
+    },
+    intelLabel: { ...getTypography(colors).bodySmall, fontSize: 11, marginBottom: 2 },
+    intelValue: { ...getTypography(colors).body, fontWeight: '700', fontSize: 13 },
+    intelSubtext: { ...getTypography(colors).bodySmall, marginTop: 3 },
+
+    // Fan challenge
+    challengeCard: {
+        backgroundColor: colors.surface,
+        borderRadius: Layout.radiusLg,
+        padding: 18,
+        marginBottom: 16,
+        borderWidth: 1,
+        borderColor: colors.border,
+        ...Layout.shadow,
+    },
+    challengeRow: { flexDirection: 'row', gap: 8, marginBottom: 10 },
+    challengeBtn: {
+        flex: 1,
+        borderWidth: 2,
+        borderColor: colors.border,
+        borderRadius: Layout.radiusMd,
+        paddingVertical: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: colors.surfaceSecondary,
+    },
+    challengeBtnText: { ...getTypography(colors).button, fontSize: 12, color: colors.text },
+    challengeScore: { ...getTypography(colors).bodySmall, color: colors.textSecondary },
 
     // No Game
     noGameCard: { padding: 40, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surface, borderRadius: Layout.radiusLg, borderWidth: 1, borderColor: colors.border, borderStyle: 'dashed', marginTop: 16 },

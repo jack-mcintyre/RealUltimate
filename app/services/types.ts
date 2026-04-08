@@ -13,6 +13,10 @@ export interface PlayerStats {
   passes: number;
   callahans: number;
   timeWithDisc: number; // in milliseconds
+  passAttempts?: number;
+  passCompletions?: number;
+  passTurnovers?: number;
+  receptions?: number;
 }
 
 export interface TeamManager {
@@ -35,6 +39,7 @@ export interface Team {
 export type EventType =
   | 'Goal' // Represents an actual point scored
   | 'G' // (Legacy short form for Goal, usually map to above in UI)
+  | 'Pickup' // Player gains disc without a recorded pass (pulls, stoppages, resets)
   | 'Throwaway' // Unforced offensive error
   | 'T' // (Legacy)
   | 'Drop' // Receiver dropped the disc
@@ -64,7 +69,10 @@ export interface GameEvent {
   teamId?: string;
   playerId?: string;
   assistPlayerId?: string; // Player who threw the assist
+  fromPlayerId?: string; // Explicit passer/thrower (advanced tracking)
+  toPlayerId?: string; // Explicit intended receiver (advanced tracking)
   timeElapsedMs?: number; // Time spent on a pass/possession
+  fromFieldPosition?: FieldCoordinate; // Origin marker for pass vector rendering
   fieldPosition?: FieldCoordinate; // Premium field map tracking
   gameElapsedSec?: number; // Seconds since game start (for timestamp bookmarks)
 }

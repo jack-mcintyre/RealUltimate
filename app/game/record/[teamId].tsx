@@ -1,13 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, router } from 'expo-router';
-import React, { useEffect, useState, useRef } from 'react';
-import { Alert, Animated, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, TouchableWithoutFeedback, Switch, Modal, Dimensions } from 'react-native';
-import { useGame } from '../../hooks/useGame';
-import { TeamService } from '../../services/TeamService';
-import { Team, EventType, FieldCoordinate } from '../../services/types';
+import { router, useLocalSearchParams } from 'expo-router';
+import React, { useEffect, useRef, useState } from 'react';
+import { Alert, Animated, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
 import { auth } from '../../../firebaseConfig';
+import { useGame } from '../../hooks/useGame';
+import { GameService } from '../../services/GameService';
+import { TeamService } from '../../services/TeamService';
+import { EventType, FieldCoordinate, GameState, Team } from '../../services/types';
 import { getTypography, Layout } from '../../theme/DesignSystem';
-import { useTheme, ThemeColors } from '../../theme/ThemeContext';
+import { ThemeColors, useTheme } from '../../theme/ThemeContext';
 
 // --- Custom 3D Tactile Button ---
 const TactileButton = ({ 
@@ -70,6 +71,22 @@ const FieldMap = ({
     oppTeamName: string;
 }) => {
     const [fieldLayout, setFieldLayout] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+
+    const formatEndzoneLabel = (name: string) => {
+        const trimmed = (name || '').trim().toUpperCase();
+        if (!trimmed) return '';
+
+        const words = trimmed.split(/\s+/).filter(Boolean);
+        if (words.length === 1) {
+            const word = words[0];
+            if (word.length <= 10) return word;
+            const cut = Math.ceil(word.length / 2);
+            return `${word.slice(0, cut)}\n${word.slice(cut)}`;
+        }
+
+        const midpoint = Math.ceil(words.length / 2);
+        return `${words.slice(0, midpoint).join(' ')}\n${words.slice(midpoint).join(' ')}`;
+    };
 
     const handleFieldPress = (event: any) => {
         // Use pageX/pageY relative to the field element via onLayout dimensions
@@ -136,13 +153,13 @@ const FieldMap = ({
                     
                     {/* Endzone labels (flipped to face outwards) */}
                     <View style={{ position: 'absolute', left: 0, width: '18%', top: 0, bottom: 0, justifyContent: 'center', alignItems: 'center' }}>
-                        <View style={{ width: 190, transform: [{ rotate: '-90deg' }] }}>
-                            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16, fontWeight: 'bold', letterSpacing: 2, textAlign: 'center' }} adjustsFontSizeToFit numberOfLines={1}>{oppTeamName.toUpperCase()}</Text>
+                        <View style={{ width: 170, transform: [{ rotate: '-90deg' }] }}>
+                            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 15, lineHeight: 17, fontWeight: 'bold', letterSpacing: 1.5, textAlign: 'center' }} numberOfLines={2}>{formatEndzoneLabel(oppTeamName)}</Text>
                         </View>
                     </View>
                     <View style={{ position: 'absolute', right: 0, width: '18%', top: 0, bottom: 0, justifyContent: 'center', alignItems: 'center' }}>
-                         <View style={{ width: 190, transform: [{ rotate: '90deg' }] }}>
-                            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16, fontWeight: 'bold', letterSpacing: 2, textAlign: 'center' }} adjustsFontSizeToFit numberOfLines={1}>{ourTeamName.toUpperCase()}</Text>
+                         <View style={{ width: 170, transform: [{ rotate: '90deg' }] }}>
+                            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 15, lineHeight: 17, fontWeight: 'bold', letterSpacing: 1.5, textAlign: 'center' }} numberOfLines={2}>{formatEndzoneLabel(ourTeamName)}</Text>
                         </View>
                     </View>
 
@@ -172,6 +189,199 @@ const FieldMap = ({
     );
 };
 
+type PlayerPrepMetrics = {
+    id: string;
+    name: string;
+    goals: number;
+    assists: number;
+    blocks: number;
+    turns: number;
+    passAttempts: number;
+    passCompletions: number;
+    passTurnovers: number;
+    receptions: number;
+    touches: number;
+};
+
+type LineAssistIntel = {
+    offense: string[];
+    defense: string[];
+    corePair: string | null;
+    riskPair: string | null;
+    notes: string[];
+    confidence: number;
+};
+
+const getEventActors = (event: any) => {
+    const throwerId = event.fromPlayerId || event.assistPlayerId || (event.type === 'Pass' ? event.playerId : undefined);
+    const receiverId = event.toPlayerId || (event.assistPlayerId ? event.playerId : undefined);
+    return { throwerId, receiverId };
+};
+
+const buildLineAssistIntel = (team: Team | null, pastGames: GameState[]): LineAssistIntel | null => {
+    if (!team?.players) return null;
+
+    const playerIds = Object.keys(team.players);
+    if (!playerIds.length) return null;
+
+    const metrics: Record<string, PlayerPrepMetrics> = {};
+    playerIds.forEach((id) => {
+        metrics[id] = {
+            id,
+            name: team.players[id].name,
+            goals: 0,
+            assists: 0,
+            blocks: 0,
+            turns: 0,
+            passAttempts: 0,
+            passCompletions: 0,
+            passTurnovers: 0,
+            receptions: 0,
+            touches: 0,
+        };
+    });
+
+    const pairings: Record<string, { throwerName: string; receiverName: string; attempts: number; completions: number; turnovers: number }> = {};
+    let totalTrackedPasses = 0;
+
+    pastGames.forEach((game) => {
+        (game.history || []).forEach((event: any) => {
+            const { throwerId, receiverId } = getEventActors(event);
+            const isCompletion = event.type === 'Pass' || event.type === 'Goal' || event.type === 'G';
+            const isTurn = event.type === 'Throwaway' || event.type === 'T' || event.type === 'Drop';
+
+            if (event.playerId && metrics[event.playerId]) {
+                if (event.type === 'Goal' || event.type === 'G') metrics[event.playerId].goals += 1;
+                if (event.type === 'Callahan_US') {
+                    metrics[event.playerId].goals += 1;
+                    metrics[event.playerId].blocks += 1;
+                }
+                if (event.type === 'D' || event.type === 'D-Block') metrics[event.playerId].blocks += 1;
+                if (event.type === 'Throwaway' || event.type === 'T' || event.type === 'Drop' || event.type === 'Callahan_THEM') {
+                    metrics[event.playerId].turns += 1;
+                }
+            }
+
+            if ((event.type === 'Goal' || event.type === 'G') && event.assistPlayerId && metrics[event.assistPlayerId]) {
+                metrics[event.assistPlayerId].assists += 1;
+            }
+
+            if (throwerId && metrics[throwerId] && (isCompletion || isTurn)) {
+                metrics[throwerId].touches += 1;
+                metrics[throwerId].passAttempts += 1;
+                totalTrackedPasses += 1;
+
+                if (isCompletion) metrics[throwerId].passCompletions += 1;
+                if (isTurn) {
+                    metrics[throwerId].passTurnovers += 1;
+                    metrics[throwerId].turns += 1;
+                }
+
+                if (receiverId && metrics[receiverId] && isCompletion) {
+                    metrics[receiverId].receptions += 1;
+                    metrics[receiverId].touches += 1;
+                }
+
+                if (receiverId && metrics[receiverId]) {
+                    const key = `${throwerId}|${receiverId}`;
+                    if (!pairings[key]) {
+                        pairings[key] = {
+                            throwerName: metrics[throwerId].name,
+                            receiverName: metrics[receiverId].name,
+                            attempts: 0,
+                            completions: 0,
+                            turnovers: 0,
+                        };
+                    }
+                    pairings[key].attempts += 1;
+                    if (isCompletion) pairings[key].completions += 1;
+                    if (isTurn) pairings[key].turnovers += 1;
+                }
+            }
+        });
+    });
+
+    const players = Object.values(metrics).map((p) => {
+        const passPct = p.passAttempts > 0 ? p.passCompletions / p.passAttempts : 0;
+        const offenseScore =
+            (p.goals * 2.2) +
+            (p.assists * 1.9) +
+            (p.receptions * 0.8) +
+            (passPct * 20) +
+            (p.touches * 0.25) -
+            (p.passTurnovers * 1.4) -
+            (p.turns * 0.8);
+
+        const defenseScore =
+            (p.blocks * 2.4) +
+            ((p.goals > 0 ? 0.4 : 0)) +
+            ((1 - passPct) * 4) +
+            (p.touches * 0.15) -
+            (p.turns * 0.6);
+
+        return {
+            ...p,
+            offenseScore,
+            defenseScore,
+        };
+    });
+
+    const offense = [...players]
+        .sort((a, b) => b.offenseScore - a.offenseScore)
+        .slice(0, 7)
+        .map((p) => p.name.split(' ')[0]);
+
+    const defense = [...players]
+        .sort((a, b) => b.defenseScore - a.defenseScore)
+        .slice(0, 7)
+        .map((p) => p.name.split(' ')[0]);
+
+    const reliablePairs = Object.values(pairings).filter((pair) => pair.attempts >= 3);
+    const corePair = reliablePairs.length
+        ? [...reliablePairs].sort((a, b) => {
+            const aPct = a.completions / a.attempts;
+            const bPct = b.completions / b.attempts;
+            if (bPct !== aPct) return bPct - aPct;
+            return b.attempts - a.attempts;
+        })[0]
+        : null;
+
+    const riskPair = reliablePairs.length
+        ? [...reliablePairs].sort((a, b) => {
+            const aRisk = a.turnovers / a.attempts;
+            const bRisk = b.turnovers / b.attempts;
+            if (bRisk !== aRisk) return bRisk - aRisk;
+            return b.attempts - a.attempts;
+        })[0]
+        : null;
+
+    const offenseAnchor = players.length ? [...players].sort((a, b) => b.offenseScore - a.offenseScore)[0] : null;
+    const defenseAnchor = players.length ? [...players].sort((a, b) => b.defenseScore - a.defenseScore)[0] : null;
+
+    const notes: string[] = [];
+    if (offenseAnchor) notes.push(`Offensive hub: ${offenseAnchor.name.split(' ')[0]} (${offenseAnchor.goals}G/${offenseAnchor.assists}A historical impact).`);
+    if (defenseAnchor) notes.push(`Defensive tone-setter: ${defenseAnchor.name.split(' ')[0]} (${defenseAnchor.blocks} blocks tracked).`);
+    if (corePair) {
+        const pct = Math.round((corePair.completions / corePair.attempts) * 100);
+        notes.push(`Lean on ${corePair.throwerName.split(' ')[0]} to ${corePair.receiverName.split(' ')[0]} (${pct}% on ${corePair.attempts} looks).`);
+    }
+    if (riskPair && riskPair.turnovers > 0) {
+        const riskPct = Math.round((riskPair.turnovers / riskPair.attempts) * 100);
+        notes.push(`Watch-risk link: ${riskPair.throwerName.split(' ')[0]} to ${riskPair.receiverName.split(' ')[0]} (${riskPct}% turnovers).`);
+    }
+
+    const confidence = Math.max(20, Math.min(99, Math.round((Math.log(totalTrackedPasses + 1) / Math.log(220)) * 100)));
+
+    return {
+        offense,
+        defense,
+        corePair: corePair ? `${corePair.throwerName.split(' ')[0]} to ${corePair.receiverName.split(' ')[0]}` : null,
+        riskPair: riskPair && riskPair.turnovers > 0 ? `${riskPair.throwerName.split(' ')[0]} to ${riskPair.receiverName.split(' ')[0]}` : null,
+        notes,
+        confidence,
+    };
+};
+
 export default function RecorderScreen() {
     const { teamId } = useLocalSearchParams<{ teamId: string }>();
     const { colors } = useTheme();
@@ -194,6 +404,8 @@ export default function RecorderScreen() {
     const [streamUrlSetup, setStreamUrlSetup] = useState('');
     const [showSotgModal, setShowSotgModal] = useState(false);
     const [sotgForm, setSotgForm] = useState({ rules: 2, fouls: 2, fairness: 2, attitude: 2, communication: 2 });
+    const [prepGames, setPrepGames] = useState<GameState[]>([]);
+    const [isPrepIntelLoading, setIsPrepIntelLoading] = useState(false);
     
     // In-Game Advanced Tracking
     const [discHolderId, setDiscHolderId] = useState<string | null>(null);
@@ -202,6 +414,8 @@ export default function RecorderScreen() {
 
     // Field Map
     const [pendingFieldCoord, setPendingFieldCoord] = useState<FieldCoordinate | null>(null);
+    const [lastKnownPlayerCoords, setLastKnownPlayerCoords] = useState<Record<string, FieldCoordinate>>({});
+    const [pendingPassTargetId, setPendingPassTargetId] = useState<string | null>(null);
 
     // Bench Hand-off
     const [showHandoffModal, setShowHandoffModal] = useState(false);
@@ -228,6 +442,43 @@ export default function RecorderScreen() {
         }
     }, [discHolderId, gameState.possession, gameState.advancedTracking, gameState.isGameActive]);
 
+    const normalizeCoord = (coord: FieldCoordinate | null | undefined): FieldCoordinate | undefined => {
+        if (!coord) return undefined;
+        if (coord.x < 0 || coord.y < 0) return undefined;
+        return coord;
+    };
+
+    const rememberPlayerCoord = (playerId?: string | null, coord?: FieldCoordinate) => {
+        if (!playerId || !coord) return;
+        setLastKnownPlayerCoords(prev => ({ ...prev, [playerId]: coord }));
+    };
+
+    const completeTrackedPass = (receiverId: string, receiverCoord?: FieldCoordinate) => {
+        if (!discHolderId || discHolderId === receiverId) return;
+
+        const timeElapsedMs = possessionStartTime ? Date.now() - possessionStartTime : 0;
+        const throwerCoord = normalizeCoord(lastKnownPlayerCoords[discHolderId]);
+
+        recordEvent('Pass', {
+            playerId: receiverId,
+            assistPlayerId: discHolderId,
+            fromPlayerId: discHolderId,
+            toPlayerId: receiverId,
+            timeElapsedMs,
+            fromFieldPosition: throwerCoord,
+            fieldPosition: receiverCoord,
+        });
+
+        rememberPlayerCoord(receiverId, receiverCoord);
+        // Keep the confirmed receiver marker visible so a second tap is not needed.
+        setPendingFieldCoord(receiverCoord || null);
+        setPendingPassTargetId(null);
+        setPrevHolderId(discHolderId);
+        setDiscHolderId(receiverId);
+        setSelectedPlayer(receiverId);
+        setPossessionStartTime(Date.now());
+    };
+
     const handlePlayerPress = (playerId: string) => {
         if (!gameState.isGameActive || !gameState.advancedTracking || gameState.possession !== ourTeam?.id) {
             setSelectedPlayer(playerId);
@@ -236,15 +487,23 @@ export default function RecorderScreen() {
         
         if (!discHolderId) {
             setDiscHolderId(playerId);
+            const pickupCoord = normalizeCoord(pendingFieldCoord);
+            rememberPlayerCoord(playerId, pickupCoord);
+            recordEvent('Pickup', {
+                playerId,
+                fieldPosition: pickupCoord,
+            });
             setPossessionStartTime(Date.now());
         } else if (discHolderId !== playerId) {
-            const timeElapsedMs = possessionStartTime ? Date.now() - possessionStartTime : 0;
-            recordEvent('Pass', { playerId: discHolderId, timeElapsedMs, fieldPosition: pendingFieldCoord || undefined });
-            setPendingFieldCoord(null);
-            
-            setPrevHolderId(discHolderId);
-            setDiscHolderId(playerId);
-            setPossessionStartTime(Date.now());
+            // With field map enabled, choose receiver first, then map tap confirms the pass endpoint.
+            if (gameState.fieldMapEnabled) {
+                setPendingPassTargetId(playerId);
+                setSelectedPlayer(playerId);
+                return;
+            }
+
+            const receiverCoord = normalizeCoord(pendingFieldCoord);
+            completeTrackedPass(playerId, receiverCoord);
         }
     };
 
@@ -267,19 +526,49 @@ export default function RecorderScreen() {
     };
 
     const handleAction = (type: EventType) => {
+        if (pendingPassTargetId) {
+            Alert.alert('Finish Pass First', 'Tap the receiver location on the map to confirm this pass before logging another event.');
+            return;
+        }
+
         const timeElapsedMs = possessionStartTime ? Date.now() - possessionStartTime : 0;
+        const actorId = gameState.advancedTracking && gameState.possession === ourTeam?.id
+            ? (discHolderId || selectedPlayer || undefined)
+            : (selectedPlayer || discHolderId || undefined);
+        const actorCoord = normalizeCoord(pendingFieldCoord);
+
+        if (actorId && actorCoord) {
+            rememberPlayerCoord(actorId, actorCoord);
+        }
 
         if (type === 'G') {
+            const assisterId = gameState.advancedTracking ? prevHolderId : undefined;
+            const recentAssistPass = (gameState.history || []).slice().reverse().find((event: any) => {
+                if (event.type !== 'Pass') return false;
+                const throwerId = event.fromPlayerId || event.assistPlayerId || event.playerId;
+                const receiverId = event.toPlayerId || (event.assistPlayerId ? event.playerId : undefined);
+                return throwerId === assisterId && receiverId === actorId;
+            });
+
             handleGoal('G', { 
-                playerId: selectedPlayer, 
-                assistPlayerId: gameState.advancedTracking ? prevHolderId : undefined,
+                playerId: actorId,
+                assistPlayerId: assisterId,
+                fromPlayerId: assisterId,
+                toPlayerId: actorId,
+                fromFieldPosition: recentAssistPass?.fromFieldPosition || (assisterId ? normalizeCoord(lastKnownPlayerCoords[assisterId]) : undefined),
                 timeElapsedMs,
-                fieldPosition: pendingFieldCoord || undefined,
+                // In ultimate, a goal is caught in the endzone; default to the scorer's tracked catch spot.
+                fieldPosition: (actorId ? normalizeCoord(lastKnownPlayerCoords[actorId]) : undefined) || actorCoord,
             });
         } else if (type === 'Callahan_US' || type === 'Callahan_THEM' || type === 'Opponent Score') {
-            handleGoal(type, { playerId: selectedPlayer, fieldPosition: pendingFieldCoord || undefined });
+            handleGoal(type, { playerId: actorId, fieldPosition: actorCoord });
         } else {
-            recordEvent(type, { playerId: selectedPlayer, timeElapsedMs, fieldPosition: pendingFieldCoord || undefined });
+            recordEvent(type, {
+                playerId: actorId,
+                fromPlayerId: actorId,
+                timeElapsedMs,
+                fieldPosition: actorCoord,
+            });
         }
 
         setPendingFieldCoord(null);
@@ -322,6 +611,28 @@ export default function RecorderScreen() {
         });
         return unsubscribe;
     }, [teamId]); 
+
+    useEffect(() => {
+        if (!ourTeam?.id) return;
+
+        let cancelled = false;
+        setIsPrepIntelLoading(true);
+
+        GameService.getPastGamesForTeam(ourTeam.id)
+            .then((games) => {
+                if (!cancelled) setPrepGames(games);
+            })
+            .catch(() => {
+                if (!cancelled) setPrepGames([]);
+            })
+            .finally(() => {
+                if (!cancelled) setIsPrepIntelLoading(false);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [ourTeam?.id]);
 
     const handleStartGame = async () => {
         if (!ourTeam) return;
@@ -444,6 +755,11 @@ export default function RecorderScreen() {
 
     const isGameOver = gameState.score1 >= gameState.gameTarget || gameState.score2 >= gameState.gameTarget;
     const isLocked = isGameOver || gameState.isHalftime;
+    const hasCurrentActor = !!(gameState.advancedTracking && gameState.possession === ourTeam?.id
+        ? (discHolderId || selectedPlayer)
+        : (selectedPlayer || discHolderId));
+    const actionLockedByPendingPass = !!pendingPassTargetId;
+    const preGameIntel = !gameState.isGameActive ? buildLineAssistIntel(ourTeam, prepGames) : null;
 
     return (
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.container}>
@@ -508,6 +824,36 @@ export default function RecorderScreen() {
                         </View>
 
                         <View style={styles.setupDivider} />
+
+                        <View style={styles.coachIntelCard}>
+                            <View style={styles.coachIntelHeader}>
+                                <Ionicons name="sparkles" size={18} color={colors.primary} />
+                                <Text style={styles.coachIntelTitle}>Line Recommendation Assistant</Text>
+                                <Text style={styles.coachIntelConfidence}>
+                                    {isPrepIntelLoading ? '...' : `${preGameIntel?.confidence ?? 20}%`}
+                                </Text>
+                            </View>
+
+                            {isPrepIntelLoading ? (
+                                <Text style={styles.coachIntelSubtext}>Building pre-game intelligence from recent matches...</Text>
+                            ) : preGameIntel ? (
+                                <>
+                                    <Text style={styles.coachIntelSubtext}>Suggested O-line: {preGameIntel.offense.join(', ') || 'Not enough data yet'}</Text>
+                                    <Text style={styles.coachIntelSubtext}>Suggested D-line: {preGameIntel.defense.join(', ') || 'Not enough data yet'}</Text>
+                                    {preGameIntel.corePair && (
+                                        <Text style={styles.coachIntelSubtext}>Core connection: {preGameIntel.corePair}</Text>
+                                    )}
+                                    {preGameIntel.riskPair && (
+                                        <Text style={[styles.coachIntelSubtext, { color: colors.error }]}>Risk connection to monitor: {preGameIntel.riskPair}</Text>
+                                    )}
+                                    {preGameIntel.notes.map((note, idx) => (
+                                        <Text key={`${note}-${idx}`} style={styles.coachIntelBullet}>• {note}</Text>
+                                    ))}
+                                </>
+                            ) : (
+                                <Text style={styles.coachIntelSubtext}>Play a few tracked games to unlock lineup recommendations.</Text>
+                            )}
+                        </View>
 
                         {/* Feature Toggles */}
                         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
@@ -577,6 +923,11 @@ export default function RecorderScreen() {
                             {gameState.advancedTracking && gameState.possession === ourTeam?.id && !discHolderId && !isLocked && (
                                 <Text style={[styles.sectionSubtitle, { color: colors.primary, fontWeight: '700' }]}>● Select the player who picked up the disc.</Text>
                             )}
+                            {gameState.advancedTracking && gameState.fieldMapEnabled && gameState.possession === ourTeam?.id && pendingPassTargetId && !isLocked && (
+                                <Text style={[styles.sectionSubtitle, { color: colors.warning, fontWeight: '700' }]}>
+                                    ● Pass target selected: tap {ourTeam?.players?.[pendingPassTargetId]?.name?.split(' ')[0] || 'receiver'} location on the map to confirm.
+                                </Text>
+                            )}
                             {gameState.advancedTracking && gameState.possession === ourTeam?.id && discHolderId && !isLocked && (
                                 <Text style={[styles.sectionSubtitle, { color: colors.success, fontWeight: '700' }]}>● Tracking Time. Select their target to log a Pass.</Text>
                             )}
@@ -645,7 +996,20 @@ export default function RecorderScreen() {
                                     if (coord.x < 0 || coord.y < 0) {
                                         setPendingFieldCoord(null);
                                     } else {
-                                        setPendingFieldCoord(coord);
+                                        if (pendingPassTargetId && gameState.advancedTracking && gameState.possession === ourTeam?.id) {
+                                            completeTrackedPass(pendingPassTargetId, normalizeCoord(coord));
+                                        } else {
+                                            const normalized = normalizeCoord(coord);
+                                            setPendingFieldCoord(coord);
+
+                                            // Capture the current holder's location even before an event is tapped.
+                                            if (gameState.advancedTracking && gameState.possession === ourTeam?.id) {
+                                                const activeHolderId = discHolderId || selectedPlayer;
+                                                if (activeHolderId) {
+                                                    rememberPlayerCoord(activeHolderId, normalized);
+                                                }
+                                            }
+                                        }
                                     }
                                 }}
                                 colors={colors}
@@ -668,23 +1032,23 @@ export default function RecorderScreen() {
                                 gameState.possession === ourTeam?.id ? (
                                     <View style={styles.actionBoard}>
                                         <View style={styles.actionBoardRow}>
-                                            <TactileButton title="Goal" icon="aperture" color={colors.primary} disabled={!selectedPlayer} onPress={() => handleAction('G')} />
-                                            <TactileButton title="Throwaway" icon="close-circle" color={colors.error} disabled={!selectedPlayer} onPress={() => handleAction('T')} />
+                                            <TactileButton title="Goal" icon="aperture" color={colors.primary} disabled={!hasCurrentActor || actionLockedByPendingPass} onPress={() => handleAction('G')} />
+                                            <TactileButton title="Throwaway" icon="close-circle" color={colors.error} disabled={!hasCurrentActor || actionLockedByPendingPass} onPress={() => handleAction('T')} />
                                         </View>
                                         <View style={styles.actionBoardRow}>
-                                            <TactileButton title="Drop" icon="arrow-down-circle" color={colors.warning} disabled={!selectedPlayer} onPress={() => handleAction('Drop')} />
-                                            <TactileButton title="Opp. Callahan" icon="flash" color="#b45309" disabled={!selectedPlayer} onPress={() => handleAction('Callahan_THEM')} />
+                                            <TactileButton title="Drop" icon="arrow-down-circle" color={colors.warning} disabled={!hasCurrentActor || actionLockedByPendingPass} onPress={() => handleAction('Drop')} />
+                                            <TactileButton title="Opp. Callahan" icon="flash" color="#b45309" disabled={!hasCurrentActor || actionLockedByPendingPass} onPress={() => handleAction('Callahan_THEM')} />
                                         </View>
                                     </View>
                                 ) : (
                                     <View style={styles.actionBoard}>
                                         <View style={styles.actionBoardRow}>
-                                            <TactileButton title="D-Block" icon="hand-left" color={colors.primary} disabled={!selectedPlayer} onPress={() => handleAction('D')} />
+                                            <TactileButton title="D-Block" icon="hand-left" color={colors.primary} disabled={!hasCurrentActor || actionLockedByPendingPass} onPress={() => handleAction('D')} />
                                             <TactileButton title="Opp. Turnover" icon="sync" color={colors.success} onPress={() => handleAction('Opponent Turnover')} />
                                         </View>
                                         <View style={styles.actionBoardRow}>
                                             <TactileButton title="Opp. Score" icon="flag" color={colors.error} onPress={() => handleAction('Opponent Score')} />
-                                            <TactileButton title="US Callahan!" icon="flash" color={colors.success} disabled={!selectedPlayer} onPress={() => handleAction('Callahan_US')} />
+                                            <TactileButton title="US Callahan!" icon="flash" color={colors.success} disabled={!hasCurrentActor || actionLockedByPendingPass} onPress={() => handleAction('Callahan_US')} />
                                         </View>
                                     </View>
                                 )
@@ -716,6 +1080,11 @@ export default function RecorderScreen() {
                                     <Text style={styles.logText}>
                                         {e.type.includes('Halftime') ? (
                                             <Text style={{ fontWeight: '600', color: colors.text }}>{e.type.toUpperCase()}</Text>
+                                        ) : e.type === 'Pass' ? (
+                                            <Text>
+                                                <Text style={{ fontWeight: '600', color: colors.text }}>PASS </Text>
+                                                {ourTeam?.players?.[e.fromPlayerId || e.assistPlayerId || '']?.name?.split(' ')?.[0] || 'Unknown'} to {ourTeam?.players?.[e.toPlayerId || e.playerId || '']?.name?.split(' ')?.[0] || 'Unknown'}
+                                            </Text>
                                         ) : (
                                             <Text>
                                                 <Text style={{ fontWeight: '600', color: colors.text }}>{e.type.replace('_', ' ').toUpperCase()}</Text>
@@ -868,6 +1237,26 @@ const getStyles = (colors: ThemeColors) => {
     setupCard: { backgroundColor: colors.surface, padding: 24, borderRadius: Layout.radiusLg, borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
     setupHeaderBox: { alignItems: 'center', marginBottom: 24 },
     setupTitle: { ...getTypography(colors).title, fontSize: 20, marginTop: 8 },
+    coachIntelCard: {
+        backgroundColor: colors.surfaceSecondary,
+        padding: 14,
+        borderRadius: Layout.radiusMd,
+        borderWidth: 1,
+        borderColor: colors.border,
+        marginBottom: 22,
+    },
+    coachIntelHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 8 },
+    coachIntelTitle: { ...getTypography(colors).body, fontWeight: '700', flex: 1 },
+    coachIntelConfidence: {
+        ...getTypography(colors).label,
+        color: colors.primary,
+        backgroundColor: colors.primaryLight,
+        paddingHorizontal: 8,
+        paddingVertical: 2,
+        borderRadius: 10,
+    },
+    coachIntelSubtext: { ...getTypography(colors).bodySmall, marginBottom: 6 },
+    coachIntelBullet: { ...getTypography(colors).bodySmall, color: colors.text, marginBottom: 4 },
     inputLabel: { ...getTypography(colors).label, marginBottom: 8 },
     input: { ...getTypography(colors).body, backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border, padding: 16, borderRadius: Layout.radiusMd, color: colors.text, marginBottom: 16 },
     dividerText: { ...getTypography(colors).bodySmall, textAlign: 'center', marginVertical: 8 },

@@ -1,13 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, Image } from 'react-native';
+import { Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { auth } from '../../firebaseConfig';
-import { TeamService } from '../services/TeamService';
 import { GameService } from '../services/GameService';
-import { Team, GameState } from '../services/types';
+import { TeamService } from '../services/TeamService';
+import { GameState, Team } from '../services/types';
 import { getTypography, Layout } from '../theme/DesignSystem';
-import { useTheme, ThemeColors } from '../theme/ThemeContext';
+import { ThemeColors, useTheme } from '../theme/ThemeContext';
 
 export default function TeamsHubScreen() {
     const [coachedTeams, setCoachedTeams] = useState<Team[]>([]);
@@ -41,13 +41,21 @@ export default function TeamsHubScreen() {
             const allTeams = [...coachedTeams, ...spectatedTeams];
             const liveTeams = allTeams.filter(t => t.activeGameId);
             const newDetails: Record<string, GameState> = {};
-            
-            for (const t of liveTeams) {
-                if (t.activeGameId && !liveGameDetails[t.activeGameId]) {
-                    const game = await GameService.getGameById(t.activeGameId);
-                    if (game) newDetails[t.activeGameId] = game;
-                }
-            }
+
+            const idsToFetch = Array.from(new Set(
+                liveTeams
+                    .map((team) => team.activeGameId)
+                    .filter((id): id is string => !!id && !liveGameDetails[id])
+            ));
+
+            const fetchedGames = await Promise.all(
+                idsToFetch.map(async (id) => ({ id, game: await GameService.getGameById(id) }))
+            );
+
+            fetchedGames.forEach(({ id, game }) => {
+                if (game) newDetails[id] = game;
+            });
+
             if (Object.keys(newDetails).length > 0) {
                 setLiveGameDetails(prev => ({ ...prev, ...newDetails }));
             }

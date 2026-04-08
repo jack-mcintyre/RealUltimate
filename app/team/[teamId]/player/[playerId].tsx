@@ -1,12 +1,30 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { GameService } from '../../../services/GameService';
 import { TeamService } from '../../../services/TeamService';
-import { GameState, Team, PlayerStats } from '../../../services/types';
+import { GameState, Team } from '../../../services/types';
 import { getTypography, Layout } from '../../../theme/DesignSystem';
-import { useTheme, ThemeColors } from '../../../theme/ThemeContext';
+import { ThemeColors, useTheme } from '../../../theme/ThemeContext';
+
+const isValidCoord = (coord: any) => typeof coord?.x === 'number' && typeof coord?.y === 'number' && coord.x >= 0 && coord.y >= 0;
+
+const zoneValueFromX = (x: number) => {
+    const clamped = Math.max(0, Math.min(100, x));
+    const base = clamped / 100;
+    const redZoneBonus = clamped >= 82 ? 0.35 : 0;
+    const ownEndzonePenalty = clamped <= 18 ? -0.15 : 0;
+    return base + redZoneBonus + ownEndzonePenalty;
+};
+
+const classifyThrowProfile = (dx: number, dy: number, distance: number, toX: number) => {
+    if (toX >= 82 && distance >= 16) return 'Red Zone Attack';
+    if (distance >= 32 && dx >= 18) return 'Huck';
+    if (Math.abs(dy) >= 20) return 'Break';
+    if (distance <= 12) return 'Reset';
+    return 'Under';
+};
 
 export default function PlayerProfileScreen() {
     const { isDark, colors } = useTheme();
@@ -29,8 +47,6 @@ export default function PlayerProfileScreen() {
         };
 
         loadStats();
-
-        loadStats();
         return unsubscribe;
     }, [teamId, playerId]);
 
@@ -48,7 +64,11 @@ export default function PlayerProfileScreen() {
     }
 
     const gamesWithPlayer = allGames.filter(game => {
-        return (game.history || []).some(e => e.playerId === playerId || e.assistPlayerId === playerId);
+        return (game.history || []).some(e => {
+            const throwerId = e.fromPlayerId || e.assistPlayerId || (e.type === 'Pass' ? e.playerId : undefined);
+            const receiverId = e.toPlayerId || (e.assistPlayerId ? e.playerId : undefined);
+            return e.playerId === playerId || e.assistPlayerId === playerId || throwerId === playerId || receiverId === playerId;
+        });
     });
 
     const availableYears = ['All Time', ...Array.from(new Set(gamesWithPlayer.map(g => {
@@ -62,8 +82,14 @@ export default function PlayerProfileScreen() {
     });
 
     let goals = 0; let assists = 0; let blocks = 0; let turns = 0;
-    let passes = 0; let callahans = 0; let timeWithDisc = 0;
+    let passes = 0; let passAttempts = 0; let passCompletions = 0; let passTurnovers = 0; let receptions = 0;
+    let callahans = 0; let timeWithDisc = 0;
     let gamesPlayed = 0; let wins = 0; let losses = 0;
+    const chemistryTargets: Record<string, { playerName: string; attempts: number; completions: number }> = {};
+    const throwProfiles: Record<string, { attempts: number; completions: number; turnovers: number; distanceSum: number; samples: number }> = {};
+    let epvTotal = 0;
+    let epvSamples = 0;
+    let epvPositive = 0;
 
     filteredGames.forEach(game => {
         let participated = false;
@@ -73,18 +99,72 @@ export default function PlayerProfileScreen() {
         const theirScore = isTeam1 ? game.score2 : game.score1;
 
         (game.history || []).forEach(e => {
+            const throwerId = e.fromPlayerId || e.assistPlayerId || (e.type === 'Pass' ? e.playerId : undefined);
+            const receiverId = e.toPlayerId || (e.assistPlayerId ? e.playerId : undefined);
+            const isPassCompletion = e.type === 'Pass' || e.type === 'Goal' || e.type === 'G';
+            const isPassTurn = e.type === 'Throwaway' || e.type === 'T' || e.type === 'Drop';
+
             if (e.playerId === playerId) {
                 participated = true;
                 if (e.type === 'Goal' || e.type === 'G') goals++;
                 if (e.type === 'Callahan_US') { goals++; blocks++; callahans++; }
                 if (e.type === 'D' || e.type === 'D-Block') blocks++;
                 if (e.type === 'Throwaway' || e.type === 'T' || e.type === 'Drop' || e.type === 'Callahan_THEM') turns++;
-                if (e.type === 'Pass') passes++;
                 if (e.timeElapsedMs) timeWithDisc += e.timeElapsedMs;
             }
-            if (e.assistPlayerId === playerId) {
+
+            if ((e.type === 'Goal' || e.type === 'G') && e.assistPlayerId === playerId) {
                 participated = true;
                 assists++;
+            }
+
+            if (throwerId === playerId && (isPassCompletion || isPassTurn)) {
+                participated = true;
+                passAttempts++;
+                if (isPassCompletion) {
+                    passCompletions++;
+                    passes++;
+                }
+                if (isPassTurn) passTurnovers++;
+
+                if (receiverId) {
+                    if (!chemistryTargets[receiverId]) {
+                        chemistryTargets[receiverId] = {
+                            playerName: team.players?.[receiverId]?.name?.split(' ')?.[0] || 'Unknown',
+                            attempts: 0,
+                            completions: 0,
+                        };
+                    }
+                    chemistryTargets[receiverId].attempts += 1;
+                    if (isPassCompletion) chemistryTargets[receiverId].completions += 1;
+                }
+
+                if (isValidCoord(e.fromFieldPosition) && isValidCoord(e.fieldPosition)) {
+                    const dx = e.fieldPosition.x - e.fromFieldPosition.x;
+                    const dy = e.fieldPosition.y - e.fromFieldPosition.y;
+                    const distance = Math.sqrt((dx * dx) + (dy * dy));
+                    const profile = classifyThrowProfile(dx, dy, distance, e.fieldPosition.x);
+
+                    if (!throwProfiles[profile]) {
+                        throwProfiles[profile] = { attempts: 0, completions: 0, turnovers: 0, distanceSum: 0, samples: 0 };
+                    }
+
+                    throwProfiles[profile].attempts += 1;
+                    throwProfiles[profile].distanceSum += distance;
+                    throwProfiles[profile].samples += 1;
+                    if (isPassCompletion) throwProfiles[profile].completions += 1;
+                    if (isPassTurn) throwProfiles[profile].turnovers += 1;
+
+                    const delta = zoneValueFromX(e.fieldPosition.x) - zoneValueFromX(e.fromFieldPosition.x);
+                    epvTotal += delta;
+                    epvSamples += 1;
+                    if (delta > 0) epvPositive += 1;
+                }
+            }
+
+            if (receiverId === playerId && isPassCompletion) {
+                participated = true;
+                receptions++;
             }
         });
 
@@ -95,7 +175,45 @@ export default function PlayerProfileScreen() {
         }
     });
 
-    const s = { goals, assists, blocks, turns, passes, callahans, timeWithDisc, gamesPlayed, wins, losses };
+    const topChemTarget = Object.values(chemistryTargets)
+        .filter((entry) => entry.attempts > 0)
+        .sort((a, b) => {
+            const pctA = a.completions / a.attempts;
+            const pctB = b.completions / b.attempts;
+            if (pctB !== pctA) return pctB - pctA;
+            return b.attempts - a.attempts;
+        })[0];
+
+    const passCompletionPct = passAttempts > 0 ? Math.round((passCompletions / passAttempts) * 100) : 0;
+    const throwProfileRows = Object.entries(throwProfiles)
+        .map(([name, data]) => ({
+            name,
+            attempts: data.attempts,
+            completionPct: data.attempts ? Math.round((data.completions / data.attempts) * 100) : 0,
+            avgDistance: data.samples ? Math.round(data.distanceSum / data.samples) : 0,
+        }))
+        .sort((a, b) => b.attempts - a.attempts)
+        .slice(0, 3);
+    const epvAverage = epvSamples > 0 ? epvTotal / epvSamples : 0;
+    const epvPositiveRate = epvSamples > 0 ? Math.round((epvPositive / epvSamples) * 100) : 0;
+
+    const s = {
+        goals,
+        assists,
+        blocks,
+        turns,
+        passes,
+        passAttempts,
+        passCompletions,
+        passTurnovers,
+        passCompletionPct,
+        receptions,
+        callahans,
+        timeWithDisc,
+        gamesPlayed,
+        wins,
+        losses,
+    };
     const gp = Math.max(s.gamesPlayed, 1);
 
     const formatTime = (ms: number) => {
@@ -180,8 +298,23 @@ export default function PlayerProfileScreen() {
                     
                     <View style={[styles.statGrid, { marginTop: 16 }]}>
                         <View style={styles.statBox}>
-                            <Text style={styles.statValue}>{s.passes}</Text>
-                            <Text style={styles.statLabel}>Passes</Text>
+                            <Text style={styles.statValue}>{s.passAttempts}</Text>
+                            <Text style={styles.statLabel}>Pass Attempts</Text>
+                        </View>
+                        <View style={styles.statBox}>
+                            <Text style={[styles.statValue, { color: s.passCompletionPct >= 75 ? colors.success : colors.text }]}>{s.passCompletionPct}%</Text>
+                            <Text style={styles.statLabel}>Pass Completion</Text>
+                        </View>
+                        <View style={styles.statBox}>
+                            <Text style={styles.statValue}>{s.receptions}</Text>
+                            <Text style={styles.statLabel}>Receptions</Text>
+                        </View>
+                    </View>
+
+                    <View style={[styles.statGrid, { marginTop: 16 }]}>
+                        <View style={styles.statBox}>
+                            <Text style={[styles.statValue, { color: colors.error }]}>{s.passTurnovers}</Text>
+                            <Text style={styles.statLabel}>Pass Turns</Text>
                         </View>
                         <View style={styles.statBox}>
                             <Text style={styles.statValue}>{s.callahans}</Text>
@@ -193,6 +326,38 @@ export default function PlayerProfileScreen() {
                         </View>
                     </View>
                 </View>
+
+                {/* PASSING CHEMISTRY */}
+                <View style={styles.card}>
+                    <Text style={styles.sectionTitle}>PASSING CHEMISTRY</Text>
+                    {topChemTarget ? (
+                        <>
+                            <Text style={{ ...getTypography(colors).body, fontWeight: '600', marginBottom: 6 }}>
+                                Best Link: {player.name.split(' ')[0]} to {topChemTarget.playerName}
+                            </Text>
+                            <Text style={styles.statLabel}>
+                                {topChemTarget.completions}/{topChemTarget.attempts} completed ({Math.round((topChemTarget.completions / topChemTarget.attempts) * 100)}%)
+                            </Text>
+                        </>
+                    ) : (
+                        <Text style={styles.statLabel}>Not enough tracked pass data yet.</Text>
+                    )}
+                </View>
+
+                {throwProfileRows.length > 0 && (
+                    <View style={styles.card}>
+                        <Text style={styles.sectionTitle}>THROW PROFILE + EPV</Text>
+                        <Text style={{ ...getTypography(colors).bodySmall, marginBottom: 8 }}>
+                            Avg EPV delta: <Text style={{ color: epvAverage >= 0 ? colors.success : colors.error, fontWeight: '700' }}>{epvAverage.toFixed(2)}</Text>
+                            {'   '}Positive EPV: <Text style={{ fontWeight: '700' }}>{epvPositiveRate}%</Text>
+                        </Text>
+                        {throwProfileRows.map((row) => (
+                            <Text key={row.name} style={{ ...getTypography(colors).bodySmall, marginBottom: 4 }}>
+                                {row.name}: {row.completionPct}% on {row.attempts} attempts (avg {row.avgDistance})
+                            </Text>
+                        ))}
+                    </View>
+                )}
 
                 {/* PER GAME AVERAGES */}
                 <View style={styles.card}>
