@@ -2,10 +2,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import ViewShot, { captureRef } from 'react-native-view-shot';
 import { WebView } from 'react-native-webview';
 import { auth } from '../../../firebaseConfig';
+import BrandedDialog from '../../../src/components/BrandedDialog';
 import { GameService } from '../../services/GameService';
 import { TeamService } from '../../services/TeamService';
 import { GameState, PlayerStats, PredictionSnapshot, Team } from '../../services/types';
@@ -25,6 +26,22 @@ const TeamLogo = ({ name, isGuest }: { name: string, isGuest?: boolean }) => {
         </View>
     );
 };
+
+const MetricHelp = ({
+    title,
+    explanation,
+    color,
+    onShow,
+}: {
+    title: string;
+    explanation: string;
+    color: string;
+    onShow: (title: string, explanation: string) => void;
+}) => (
+    <TouchableOpacity onPress={() => onShow(title, explanation)} style={{ marginLeft: 6, marginTop: -2, alignSelf: 'center' }} activeOpacity={0.7}>
+        <Ionicons name="help-circle-outline" size={15} color={color} />
+    </TouchableOpacity>
+);
 
 const getStreamConfig = (url?: string) => {
     if (!url) return null;
@@ -747,8 +764,14 @@ export default function GameHistoryScreen() {
     const [streamEmbedKey, setStreamEmbedKey] = useState<number>(0);
     const [activeStreamUrl, setActiveStreamUrl] = useState<string | null>(null);
     const [showWelcomeModal, setShowWelcomeModal] = useState(newGame === 'true');
+    const [infoDialog, setInfoDialog] = useState<{ title: string; message: string; icon?: keyof typeof Ionicons.glyphMap; accentColor?: string } | null>(null);
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const boxScoreRef = useRef<View>(null);
     const [isSharing, setIsSharing] = useState(false);
+
+    const openMetricHelp = (title: string, explanation: string) => {
+        setInfoDialog({ title, message: explanation, icon: 'help-circle-outline' });
+    };
 
     useEffect(() => {
         if (!gameId) return;
@@ -836,24 +859,26 @@ export default function GameHistoryScreen() {
         }
     };
 
-    const handleDelete = async () => {
-        if (Platform.OS === 'web') {
-            if (window.confirm("Are you sure you want to delete this game record?")) {
-                await GameService.deleteGame(gameId);
-                router.replace('/(tabs)/teams');
+    const handleDelete = () => {
+        setShowDeleteConfirm(true);
+    };
+
+    const handleDeleteConfirmed = async () => {
+        setShowDeleteConfirm(false);
+        try {
+            const requesterId = auth.currentUser?.uid || '';
+            if (!requesterId) {
+                throw new Error('Not authenticated');
             }
-        } else {
-            Alert.alert(
-                "Delete Match",
-                "Are you sure you want to delete this game record?",
-                [
-                    { text: "Cancel", style: "cancel" },
-                    { text: "Delete", style: "destructive", onPress: async () => {
-                        await GameService.deleteGame(gameId);
-                        router.replace('/(tabs)/teams');
-                    }}
-                ]
-            );
+            await GameService.deleteGame(gameId, requesterId);
+            router.replace('/(tabs)/teams');
+        } catch {
+            setInfoDialog({
+                title: 'Delete Failed',
+                message: 'Could not delete this match record. Please try again.',
+                icon: 'warning-outline',
+                accentColor: colors.error,
+            });
         }
     };
 
@@ -868,7 +893,7 @@ export default function GameHistoryScreen() {
                     await navigator.share({ text: shareText });
                 } else {
                     await navigator.clipboard.writeText(shareText);
-                    Alert.alert('Copied!', 'Score copied to clipboard.');
+                    setInfoDialog({ title: 'Copied', message: 'Score copied to clipboard.', icon: 'copy-outline' });
                 }
             } else {
                 // On native, capture the box score card as an image
@@ -929,6 +954,7 @@ export default function GameHistoryScreen() {
     const ourScore = isTeam1 ? game.score1 : game.score2;
     const theirScore = isTeam1 ? game.score2 : game.score1;
     const isWin = ourScore > theirScore;
+    const finalResultLabel = ourScore === theirScore ? 'Tie' : (isWin ? 'Win' : 'Loss');
 
     // --- CALCULATE ADVANCED STATS ---
     const stats: Record<string, PlayerStats> = {};
@@ -1247,14 +1273,20 @@ export default function GameHistoryScreen() {
             const refreshed = await GameService.getGameById(gameId);
             setGame(refreshed);
 
-            Alert.alert(
-                'Repair Complete',
-                result.updated > 0
+            setInfoDialog({
+                title: 'Repair Complete',
+                message: result.updated > 0
                     ? `Updated ${result.updated} of ${result.total} events with legacy pass/map data.`
-                    : 'No legacy issues found to repair.'
-            );
+                    : 'No legacy issues found to repair.',
+                icon: 'construct-outline',
+            });
         } catch (error) {
-            Alert.alert('Repair Failed', 'Could not repair legacy game data.');
+            setInfoDialog({
+                title: 'Repair Failed',
+                message: 'Could not repair legacy game data.',
+                icon: 'warning-outline',
+                accentColor: colors.error,
+            });
         } finally {
             setIsRepairingLegacy(false);
         }
@@ -1333,6 +1365,30 @@ export default function GameHistoryScreen() {
                     </View>
                 </TouchableOpacity>
             </Modal>
+
+            <BrandedDialog
+                visible={!!infoDialog}
+                title={infoDialog?.title || ''}
+                message={infoDialog?.message || ''}
+                colors={colors}
+                icon={infoDialog?.icon}
+                accentColor={infoDialog?.accentColor}
+                onPrimary={() => setInfoDialog(null)}
+            />
+
+            <BrandedDialog
+                visible={showDeleteConfirm}
+                title="Delete Match Record?"
+                message="This permanently removes the full match report and event history."
+                colors={colors}
+                icon="trash-outline"
+                accentColor={colors.error}
+                primaryLabel="Delete"
+                secondaryLabel="Cancel"
+                dismissOnBackdrop={false}
+                onPrimary={handleDeleteConfirmed}
+                onSecondary={() => setShowDeleteConfirm(false)}
+            />
 
             <ScrollView contentContainerStyle={{ paddingBottom: 60 }} showsVerticalScrollIndicator={false}>
                 <View style={styles.topAppBar}>
@@ -1468,7 +1524,15 @@ export default function GameHistoryScreen() {
 
                     {/* ADVANCED ANALYTICS: EFFICIENCY & H2H */}
                     <View style={styles.card}>
-                        <Text style={styles.sectionTitle}>HEAD-TO-HEAD MATCHUP</Text>
+                        <View style={styles.sectionTitleRow}>
+                            <Text style={styles.sectionTitle}>HEAD-TO-HEAD MATCHUP</Text>
+                            <MetricHelp
+                                title="Head-to-Head Matchup"
+                                explanation="O-Line conversion tracks holds when your offense starts with possession. D-Line breaks track scores after your defense earns a turn."
+                                color={colors.textSecondary}
+                                onShow={openMetricHelp}
+                            />
+                        </View>
                         <View style={styles.h2hGrid}>
                             <View style={styles.h2hSide}>
                                 <Text style={styles.h2hTitle} numberOfLines={1}>{team.name.toUpperCase()}</Text>
@@ -1565,7 +1629,15 @@ export default function GameHistoryScreen() {
                     {/* PASSING ANALYTICS */}
                     {team.players && passChemistry.topChemistry.length > 0 && (
                         <View style={styles.card}>
-                            <Text style={styles.sectionTitle}>CHEMISTRY MATRIX</Text>
+                            <View style={styles.sectionTitleRow}>
+                                <Text style={styles.sectionTitle}>CHEMISTRY MATRIX</Text>
+                                <MetricHelp
+                                    title="Chemistry Matrix"
+                                    explanation="Chemistry combines completion reliability, turnover control, goal links, throw threat, and sample confidence into one score."
+                                    color={colors.textSecondary}
+                                    onShow={openMetricHelp}
+                                />
+                            </View>
                             <Text style={styles.sectionSubtitle}>Weighted by completion %, turnover control, goal links, throw distance, and usage confidence.</Text>
 
                             <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
@@ -1629,7 +1701,15 @@ export default function GameHistoryScreen() {
 
                     {/* EXPECTED POSSESSION VALUE */}
                     <View style={styles.card}>
-                        <Text style={styles.sectionTitle}>EXPECTED POSSESSION VALUE (BETA)</Text>
+                        <View style={styles.sectionTitleRow}>
+                            <Text style={styles.sectionTitle}>EXPECTED POSSESSION VALUE (BETA)</Text>
+                            <MetricHelp
+                                title="Expected Possession Value (EPV)"
+                                explanation="EPV estimates field-value change on each tracked throw. Positive values mean possessions are moving into stronger scoring territory, negative values mean possessions are drifting backward or becoming lower-value."
+                                color={colors.textSecondary}
+                                onShow={openMetricHelp}
+                            />
+                        </View>
                         <View style={{ flexDirection: 'row', gap: 10 }}>
                             <View style={[styles.statPill, { flex: 1 }]}>
                                 <Text style={styles.statPillLabel}>Avg EPV Delta</Text>
@@ -1645,7 +1725,15 @@ export default function GameHistoryScreen() {
                     {/* THROW PROFILE ENGINE */}
                     {throwProfileRows.length > 0 && (
                         <View style={styles.card}>
-                            <Text style={styles.sectionTitle}>THROW PROFILE ENGINE (AUTO)</Text>
+                            <View style={styles.sectionTitleRow}>
+                                <Text style={styles.sectionTitle}>THROW PROFILE ENGINE (AUTO)</Text>
+                                <MetricHelp
+                                    title="Throw Profile Engine"
+                                    explanation="Each throw is bucketed by distance and angle into profiles like Under, Break, Reset, Huck, and Red Zone Attack. This helps identify your offense identity and which throw types are most stable under pressure."
+                                    color={colors.textSecondary}
+                                    onShow={openMetricHelp}
+                                />
+                            </View>
                             <View style={styles.tableHeader}>
                                 <Text style={[styles.tableCol, { flex: 2, textAlign: 'left' }]}>Type</Text>
                                 <Text style={styles.tableCol}>ATT</Text>
@@ -1683,15 +1771,23 @@ export default function GameHistoryScreen() {
 
                     {/* CLUTCH + SPECTATOR INTELLIGENCE */}
                     <View style={styles.card}>
-                        <Text style={styles.sectionTitle}>CLUTCH + LIVE INTELLIGENCE</Text>
+                        <View style={styles.sectionTitleRow}>
+                            <Text style={styles.sectionTitle}>CLUTCH + LIVE INTELLIGENCE</Text>
+                            <MetricHelp
+                                title="Clutch + Live Intelligence"
+                                explanation="Clutch Rating rises when high-leverage throws are completed and drops when high-leverage errors occur. The win probability card is only shown as 'current' while a game is active."
+                                color={colors.textSecondary}
+                                onShow={openMetricHelp}
+                            />
+                        </View>
                         <View style={{ flexDirection: 'row', gap: 10, marginBottom: 10 }}>
                             <View style={[styles.statPill, { flex: 1 }]}>
                                 <Text style={styles.statPillLabel}>Clutch Rating</Text>
                                 <Text style={[styles.statPillValue, { color: clutchRating >= 60 ? colors.success : colors.text }]}>{clutchRating}</Text>
                             </View>
                             <View style={[styles.statPill, { flex: 1 }]}>
-                                <Text style={styles.statPillLabel}>Current Win Prob.</Text>
-                                <Text style={styles.statPillValue}>{currentWinProbPct}%</Text>
+                                <Text style={styles.statPillLabel}>{game.isGameActive ? 'Current Win Prob.' : 'Final Result'}</Text>
+                                <Text style={styles.statPillValue}>{game.isGameActive ? `${currentWinProbPct}%` : finalResultLabel}</Text>
                             </View>
                         </View>
                         {biggestPositiveSwing && (
@@ -1708,7 +1804,15 @@ export default function GameHistoryScreen() {
 
                     {/* HEATMAP HOTSPOTS */}
                     <View style={styles.card}>
-                        <Text style={styles.sectionTitle}>HEATMAP HOTSPOTS (TEXT SUMMARY)</Text>
+                        <View style={styles.sectionTitleRow}>
+                            <Text style={styles.sectionTitle}>HEATMAP HOTSPOTS (TEXT SUMMARY)</Text>
+                            <MetricHelp
+                                title="Heatmap Hotspots"
+                                explanation="Hotspots summarize where completions, turnovers, and scores most frequently finish on the field."
+                                color={colors.textSecondary}
+                                onShow={openMetricHelp}
+                            />
+                        </View>
                         <Text style={{ ...getTypography(colors).bodySmall, marginBottom: 4 }}>
                             Completion hotspot: {topCompletionZone ? `${topCompletionZone.zone} (${topCompletionZone.count})` : 'Not enough data'}
                         </Text>
@@ -1743,7 +1847,15 @@ export default function GameHistoryScreen() {
 
                     {/* OPPONENT SCOUT CARD */}
                     <View style={styles.card}>
-                        <Text style={styles.sectionTitle}>OPPONENT SCOUT CARD (BETA)</Text>
+                        <View style={styles.sectionTitleRow}>
+                            <Text style={styles.sectionTitle}>OPPONENT SCOUT CARD (BETA)</Text>
+                            <MetricHelp
+                                title="Opponent Scout Card"
+                                explanation="Summarizes how often opponents convert after surviving your defense, how often your team forces turns, and where opponent scores are finishing."
+                                color={colors.textSecondary}
+                                onShow={openMetricHelp}
+                            />
+                        </View>
                         <Text style={{ ...getTypography(colors).bodySmall, marginBottom: 4 }}>
                             Conversion vs our D-line: {opponentConversionOnDPoints}%
                         </Text>
@@ -1972,6 +2084,7 @@ const getStyles = (colors: ThemeColors) => {
     webview: { flex: 1, backgroundColor: 'transparent' },
     
     sectionTitle: { ...getTypography(colors).label, marginBottom: 16 },
+    sectionTitleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
     sectionSubtitle: { ...getTypography(colors).bodySmall, marginTop: -8, marginBottom: 16 },
 
     matchDate: { ...getTypography(colors).label, color: colors.textSecondary, marginBottom: 8 },

@@ -2,9 +2,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { auth } from '../../../../firebaseConfig';
 import { GameService } from '../../../services/GameService';
 import { TeamService } from '../../../services/TeamService';
-import { GameState, Team } from '../../../services/types';
+import { GameState, PlayerRole, ScheduledGame, Team } from '../../../services/types';
 import { getTypography, Layout } from '../../../theme/DesignSystem';
 import { ThemeColors, useTheme } from '../../../theme/ThemeContext';
 
@@ -26,12 +27,34 @@ const classifyThrowProfile = (dx: number, dy: number, distance: number, toX: num
     return 'Under';
 };
 
+const PLAYER_BADGE_OPTIONS = [
+    { key: 'captain', label: 'Captain', color: '#F59E0B', icon: 'ribbon-outline' as const },
+    { key: 'handler', label: 'Handler', color: '#2563EB', icon: 'flash-outline' as const },
+    { key: 'cutter', label: 'Cutter', color: '#16A34A', icon: 'swap-forward-outline' as const },
+    { key: 'defender', label: 'Defender', color: '#DC2626', icon: 'shield-outline' as const },
+    { key: 'playmaker', label: 'Playmaker', color: '#7C3AED', icon: 'sparkles-outline' as const },
+    { key: 'rookie', label: 'Rookie', color: '#0EA5E9', icon: 'school-outline' as const },
+    { key: 'mvp', label: 'MVP', color: '#EA580C', icon: 'trophy-outline' as const },
+    { key: 'iron', label: 'Iron', color: '#475569', icon: 'fitness-outline' as const },
+];
+
+const PLAYER_ROLE_OPTIONS: { key: PlayerRole; label: string; color: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+    { key: 'handler', label: 'Handler', color: '#2563EB', icon: 'flash-outline' },
+    { key: 'cutter', label: 'Cutter', color: '#16A34A', icon: 'swap-forward-outline' },
+    { key: 'hybrid', label: 'Hybrid', color: '#7C3AED', icon: 'shuffle-outline' },
+    { key: 'o_handler', label: 'O-Handler', color: '#1D4ED8', icon: 'arrow-forward-outline' },
+    { key: 'o_cutter', label: 'O-Cutter', color: '#059669', icon: 'arrow-up-outline' },
+    { key: 'd_handler', label: 'D-Handler', color: '#DC2626', icon: 'shield-outline' },
+    { key: 'd_cutter', label: 'D-Cutter', color: '#B91C1C', icon: 'shield-half-outline' },
+];
+
 export default function PlayerProfileScreen() {
     const { isDark, colors } = useTheme();
     const styles = getStyles(colors);
     const { teamId, playerId } = useLocalSearchParams<{ teamId: string, playerId: string }>();
     const [team, setTeam] = useState<Team | null>(null);
     const [allGames, setAllGames] = useState<GameState[]>([]);
+    const [scheduledGames, setScheduledGames] = useState<ScheduledGame[]>([]);
     const [selectedYear, setSelectedYear] = useState<string>('All Time');
 
     useEffect(() => {
@@ -41,13 +64,20 @@ export default function PlayerProfileScreen() {
             setTeam(t);
         });
 
+        const unsubscribeScheduled = TeamService.subscribeToScheduledGames(teamId, (games) => {
+            setScheduledGames(games);
+        });
+
         const loadStats = async () => {
             const history = await GameService.getPastGamesForTeam(teamId);
             setAllGames(history);
         };
 
         loadStats();
-        return unsubscribe;
+        return () => {
+            unsubscribe();
+            unsubscribeScheduled();
+        };
     }, [teamId, playerId]);
 
     if (!team || !team.players) {
@@ -62,6 +92,36 @@ export default function PlayerProfileScreen() {
     if (!player) {
          return <View style={styles.centerContainer}><Text>Player not found.</Text></View>;
     }
+
+    const currentUserId = auth.currentUser?.uid || '';
+    const canManageBadges = currentUserId === team.coachId || !!team.managers?.[currentUserId];
+    const canManagePlayerMeta = canManageBadges;
+    const nextScheduledGame = (scheduledGames || []).find((game) => {
+        if (typeof game.scheduledAt !== 'number') return true;
+        return game.scheduledAt >= Date.now();
+    }) || null;
+    const nextAvailability = nextScheduledGame?.availability?.[playerId];
+    const canSeeNextAvailability = canManagePlayerMeta && !!nextScheduledGame;
+    const selectedBadge = PLAYER_BADGE_OPTIONS.find((option) => option.key === player.badge);
+    const selectedRole = PLAYER_ROLE_OPTIONS.find((option) => option.key === player.role);
+
+    const handleAssignRole = async (roleKey: PlayerRole | null) => {
+        if (!canManagePlayerMeta || !teamId || !playerId || !currentUserId) return;
+        try {
+            await TeamService.updatePlayerRole(teamId, playerId, roleKey, currentUserId);
+        } catch {
+            // Keep this silent to avoid modal spam while selecting role chips quickly.
+        }
+    };
+
+    const handleAssignBadge = async (badgeKey: string | null) => {
+        if (!canManagePlayerMeta || !teamId || !playerId || !currentUserId) return;
+        try {
+            await TeamService.updatePlayerBadge(teamId, playerId, badgeKey, currentUserId);
+        } catch {
+            // Keep this silent to avoid modal spam while selecting badge chips quickly.
+        }
+    };
 
     const gamesWithPlayer = allGames.filter(game => {
         return (game.history || []).some(e => {
@@ -240,7 +300,28 @@ export default function PlayerProfileScreen() {
                     <View style={styles.heroAvatar}>
                         <Text style={styles.heroAvatarText}>{player.number || player.name.substring(0,2).toUpperCase()}</Text>
                     </View>
-                    <Text style={styles.heroName}>{player.name}</Text>
+                    <View style={styles.heroNameRow}>
+                        <Text style={styles.heroName}>{player.name}</Text>
+                        {canSeeNextAvailability && (nextAvailability === 'yes' || nextAvailability === 'no') && (
+                            <Ionicons
+                                name={nextAvailability === 'yes' ? 'checkmark-circle' : 'close-circle'}
+                                size={18}
+                                color={nextAvailability === 'yes' ? colors.success : colors.error}
+                            />
+                        )}
+                    </View>
+                    {!!selectedRole && (
+                        <View style={[styles.playerRoleHeroPill, { borderColor: selectedRole.color, backgroundColor: colors.surfaceSecondary }]}> 
+                            <Ionicons name={selectedRole.icon} size={13} color={selectedRole.color} />
+                            <Text style={[styles.playerRoleHeroPillText, { color: selectedRole.color }]}>{selectedRole.label}</Text>
+                        </View>
+                    )}
+                    {!!selectedBadge && (
+                        <View style={[styles.playerBadgeHeroPill, { borderColor: selectedBadge.color, backgroundColor: colors.surfaceSecondary }]}>
+                            <Ionicons name={selectedBadge.icon} size={13} color={selectedBadge.color} />
+                            <Text style={[styles.playerBadgeHeroPillText, { color: selectedBadge.color }]}>{selectedBadge.label}</Text>
+                        </View>
+                    )}
                     <TouchableOpacity 
                         style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }} 
                         onPress={() => router.push(`/team/${teamId}` as any)}
@@ -255,6 +336,62 @@ export default function PlayerProfileScreen() {
                         <Text style={styles.recordText}>{s.wins}W - {s.losses}L</Text>
                     </View>
                 </View>
+
+                {(canManagePlayerMeta || !!selectedRole) && (
+                    <View style={styles.card}>
+                        <Text style={styles.sectionTitle}>PLAYER ROLE</Text>
+                        <View style={styles.badgeGrid}>
+                            {PLAYER_ROLE_OPTIONS.map((option) => {
+                                const active = selectedRole?.key === option.key;
+                                return (
+                                    <TouchableOpacity
+                                        key={`role-option-${option.key}`}
+                                        style={[styles.badgeChip, active && { borderColor: option.color, backgroundColor: colors.surfaceSecondary }]}
+                                        onPress={() => handleAssignRole(option.key)}
+                                        disabled={!canManagePlayerMeta}
+                                        activeOpacity={0.8}
+                                    >
+                                        <Ionicons name={option.icon} size={13} color={active ? option.color : colors.textSecondary} />
+                                        <Text style={[styles.badgeChipText, active && { color: option.color }]}>{option.label}</Text>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </View>
+                        {canManagePlayerMeta && !!selectedRole && (
+                            <TouchableOpacity style={styles.clearBadgeBtn} onPress={() => handleAssignRole(null)} activeOpacity={0.8}>
+                                <Text style={styles.clearBadgeBtnText}>Clear Role</Text>
+                            </TouchableOpacity>
+                        )}
+                    </View>
+                )}
+
+                {(canManagePlayerMeta || !!selectedBadge) && (
+                    <View style={styles.card}>
+                        <Text style={styles.sectionTitle}>PLAYER BADGE</Text>
+                        <View style={styles.badgeGrid}>
+                            {PLAYER_BADGE_OPTIONS.map((option) => {
+                                const active = selectedBadge?.key === option.key;
+                                return (
+                                    <TouchableOpacity
+                                        key={`badge-option-${option.key}`}
+                                        style={[styles.badgeChip, active && { borderColor: option.color, backgroundColor: colors.surfaceSecondary }]}
+                                        onPress={() => handleAssignBadge(option.key)}
+                                        disabled={!canManageBadges}
+                                        activeOpacity={0.8}
+                                    >
+                                        <Ionicons name={option.icon} size={13} color={active ? option.color : colors.textSecondary} />
+                                        <Text style={[styles.badgeChipText, active && { color: option.color }]}>{option.label}</Text>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </View>
+                        {canManagePlayerMeta && !!selectedBadge && (
+                            <TouchableOpacity style={styles.clearBadgeBtn} onPress={() => handleAssignBadge(null)} activeOpacity={0.8}>
+                                <Text style={styles.clearBadgeBtnText}>Clear Badge</Text>
+                            </TouchableOpacity>
+                        )}
+                    </View>
+                )}
 
                 {/* YEAR FILTER */}
                 {gamesWithPlayer.length > 0 && (
@@ -441,7 +578,30 @@ const getStyles = (colors: ThemeColors) => {
     heroCard: { alignItems: 'center', backgroundColor: colors.surface, borderRadius: Layout.radiusLg, padding: 32, marginBottom: 16, borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
     heroAvatar: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.primaryLight, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
     heroAvatarText: { ...getTypography(colors).title, fontSize: 32, color: colors.primary },
-    heroName: { ...getTypography(colors).title, fontSize: 24, marginBottom: 4 },
+    heroNameRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+    heroName: { ...getTypography(colors).title, fontSize: 24 },
+    playerRoleHeroPill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+        borderWidth: 1,
+        borderRadius: Layout.radiusFull,
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        marginBottom: 8,
+    },
+    playerRoleHeroPillText: { ...getTypography(colors).bodySmall, fontWeight: '700' },
+    playerBadgeHeroPill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+        borderWidth: 1,
+        borderRadius: Layout.radiusFull,
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        marginBottom: 10,
+    },
+    playerBadgeHeroPillText: { ...getTypography(colors).bodySmall, fontWeight: '700' },
     heroSubtitle: { ...getTypography(colors).body, color: colors.textSecondary, marginBottom: 16 },
     
     recordBadge: { backgroundColor: colors.surfaceSecondary, paddingHorizontal: 16, paddingVertical: 8, borderRadius: Layout.radiusMd, borderWidth: 1, borderColor: colors.border },
@@ -449,6 +609,29 @@ const getStyles = (colors: ThemeColors) => {
 
     card: { backgroundColor: colors.surface, borderRadius: Layout.radiusLg, padding: 24, marginBottom: 16, borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
     sectionTitle: { ...getTypography(colors).label, marginBottom: 16 },
+    badgeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
+    badgeChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        borderWidth: 1,
+        borderColor: colors.border,
+        backgroundColor: colors.surface,
+        borderRadius: Layout.radiusFull,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+    },
+    badgeChipText: { ...getTypography(colors).bodySmall, color: colors.textSecondary, fontWeight: '700' },
+    clearBadgeBtn: {
+        alignSelf: 'flex-start',
+        borderWidth: 1,
+        borderColor: colors.border,
+        backgroundColor: colors.surfaceSecondary,
+        borderRadius: Layout.radiusSm,
+        paddingHorizontal: 10,
+        paddingVertical: 7,
+    },
+    clearBadgeBtnText: { ...getTypography(colors).bodySmall, color: colors.textSecondary, fontWeight: '700' },
     
     statGrid: { flexDirection: 'row', gap: 12 },
     statBox: { flex: 1, backgroundColor: colors.surfaceSecondary, paddingVertical: 16, borderRadius: Layout.radiusMd, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.border },

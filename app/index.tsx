@@ -1,17 +1,18 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import React, { useEffect, useState, useRef } from 'react';
-import { ActivityIndicator, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View, Animated, Easing } from 'react-native';
 import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword } from 'firebase/auth';
+import React, { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Animated, Easing, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { auth } from '../firebaseConfig';
 import { getTypography, Layout } from './theme/DesignSystem';
-import { useTheme, ThemeColors } from './theme/ThemeContext';
+import { ThemeColors, useTheme } from './theme/ThemeContext';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
+  const [statusMsg, setStatusMsg] = useState('');
+  const [statusType, setStatusType] = useState<'error' | 'success' | ''>('');
 
   // Animation Values
   const slideAnim = useRef(new Animated.Value(300)).current;
@@ -50,32 +51,68 @@ export default function LoginScreen() {
     return unsubscribe;
   }, []);
 
+  const setError = (message: string) => {
+    setStatusType('error');
+    setStatusMsg(message);
+  };
+
+  const setSuccess = (message: string) => {
+    setStatusType('success');
+    setStatusMsg(message);
+  };
+
+  const mapAuthError = (error: any) => {
+    const code = error?.code || '';
+    switch (code) {
+      case 'auth/invalid-email':
+        return 'Enter a valid email address.';
+      case 'auth/user-not-found':
+      case 'auth/wrong-password':
+      case 'auth/invalid-credential':
+        return 'Email or password is incorrect.';
+      case 'auth/email-already-in-use':
+        return 'That email is already registered. Try signing in instead.';
+      case 'auth/weak-password':
+        return 'Password is too weak. Use at least 6 characters.';
+      case 'auth/too-many-requests':
+        return 'Too many attempts. Please wait a minute and try again.';
+      default:
+        return error?.message || 'Something went wrong. Please try again.';
+    }
+  };
+
   const handleRegister = async () => {
-    setErrorMsg("");
+    setStatusMsg('');
+    setStatusType('');
     if (password.length < 6) {
-      setErrorMsg("Password must be at least 6 characters.");
+      setError('Password must be at least 6 characters.');
       return;
     }
     setLoading(true);
     try {
       await createUserWithEmailAndPassword(auth, email, password);
     } catch (error: any) { 
-      setErrorMsg(error.message);
+      setError(mapAuthError(error));
     } finally {
       setLoading(false);
     }
   };
 
   const handleLogin = async () => {
-    setErrorMsg("");
+    setStatusMsg('');
+    setStatusType('');
     setLoading(true);
     try {
       await signInWithEmailAndPassword(auth, email, password);
     } catch (error: any) { 
-      setErrorMsg(error.message);
+      setError(mapAuthError(error));
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleForgotPassword = () => {
+    router.push('/forgot-password');
   };
 
   const spin = spinAnim.interpolate({
@@ -103,7 +140,13 @@ export default function LoginScreen() {
             placeholder="Email Address"
             placeholderTextColor={colors.textSecondary}
             value={email}
-            onChangeText={setEmail}
+            onChangeText={(value) => {
+              setEmail(value);
+              if (statusType === 'error') {
+                setStatusMsg('');
+                setStatusType('');
+              }
+            }}
             autoCapitalize="none"
           />
           <TextInput
@@ -111,13 +154,19 @@ export default function LoginScreen() {
             placeholder="Password"
             placeholderTextColor={colors.textSecondary}
             value={password}
-            onChangeText={setPassword}
+            onChangeText={(value) => {
+              setPassword(value);
+              if (statusType === 'error') {
+                setStatusMsg('');
+                setStatusType('');
+              }
+            }}
             secureTextEntry
           />
 
-          {errorMsg ? (
-            <View style={styles.errorBox}>
-              <Text style={styles.errorText}>{errorMsg}</Text>
+          {statusMsg ? (
+            <View style={[styles.messageBox, statusType === 'error' ? styles.errorBox : styles.successBox]}>
+              <Text style={[styles.messageText, statusType === 'error' ? styles.errorText : styles.successText]}>{statusMsg}</Text>
             </View>
           ) : null}
 
@@ -131,6 +180,10 @@ export default function LoginScreen() {
 
               <TouchableOpacity style={styles.secondaryButton} onPress={handleRegister} activeOpacity={0.6}>
                 <Text style={styles.secondaryButtonText}>Create Account</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.tertiaryButton} onPress={handleForgotPassword} activeOpacity={0.7}>
+                <Text style={styles.tertiaryButtonText}>Forgot Password?</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -160,8 +213,14 @@ const getStyles = (colors: ThemeColors) => {
     
     secondaryButton: { padding: 16, alignItems: 'center' },
     secondaryButtonText: { ...Typography.button, color: colors.primary },
+    tertiaryButton: { paddingTop: 4, paddingBottom: 8, alignItems: 'center' },
+    tertiaryButtonText: { ...Typography.bodySmall, color: colors.textSecondary, textDecorationLine: 'underline' },
     
-    errorBox: { backgroundColor: colors.errorBg, padding: 12, borderRadius: Layout.radiusMd, marginBottom: 16 },
-    errorText: { ...Typography.bodySmall, color: colors.error, textAlign: 'center' }
+    messageBox: { padding: 12, borderRadius: Layout.radiusMd, marginBottom: 16, borderWidth: 1 },
+    messageText: { ...Typography.bodySmall, textAlign: 'center', fontWeight: '600' },
+    errorBox: { backgroundColor: colors.errorBg, borderColor: colors.error },
+    errorText: { color: colors.error },
+    successBox: { backgroundColor: colors.primaryLight, borderColor: colors.primary },
+    successText: { color: colors.primary }
   });
 }

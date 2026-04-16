@@ -1,8 +1,19 @@
+export type PlayerRole =
+  | 'handler'
+  | 'cutter'
+  | 'hybrid'
+  | 'o_handler'
+  | 'o_cutter'
+  | 'd_handler'
+  | 'd_cutter';
+
 export interface Player {
   id: string;
   name: string;
   number?: string;
   teamId: string;
+  role?: PlayerRole;
+  badge?: string;
 }
 
 export interface PlayerStats {
@@ -24,6 +35,61 @@ export interface TeamManager {
   role: string;
 }
 
+export interface SocialLinks {
+  x?: string;
+  youtube?: string;
+  facebook?: string;
+  instagram?: string;
+  tiktok?: string;
+  website?: string;
+}
+
+export interface TeamMediaItem {
+  id: string;
+  type: 'image' | 'youtube' | 'link';
+  title: string;
+  url: string;
+  thumbnailUrl?: string;
+  createdAt: number;
+}
+
+export interface TeamPageBranding {
+  avatarUrl?: string;
+  bannerUrl?: string;
+  bio?: string;
+}
+
+export interface TeamPageSettings {
+  isPublic: boolean;
+  advancedStatsPublic: boolean;
+  mediaPublic: boolean;
+}
+
+export interface TeamThemeConfig {
+  accentColor?: string;
+}
+
+export interface TeamPinnedAnnouncement {
+  message: string;
+  expiresAt?: number;
+}
+
+export interface TeamPageConfig {
+  branding?: TeamPageBranding;
+  settings?: TeamPageSettings;
+  socialLinks?: SocialLinks;
+  media?: TeamMediaItem[];
+  theme?: TeamThemeConfig;
+  announcement?: TeamPinnedAnnouncement;
+}
+
+export interface UserPublicProfile {
+  avatarUrl?: string;
+  bannerUrl?: string;
+  bio?: string;
+  socialLinks?: SocialLinks;
+}
+
 export interface Team {
   id: string;
   coachId: string;
@@ -34,6 +100,22 @@ export interface Team {
   managers?: Record<string, TeamManager>; // RBAC Permissions map
   role?: 'coach' | 'spectator'; // Client-side only - indicates user's relation
   activeGameId?: string; // Tethers a running game session to this team
+  pageConfig?: TeamPageConfig;
+}
+
+export type ScheduledAvailabilityStatus = 'yes' | 'no';
+
+export interface ScheduledGame {
+  id: string;
+  teamId: string;
+  teamName: string;
+  opponentName: string;
+  opponentTeamId?: string;
+  location?: string;
+  scheduledAt?: number;
+  availability?: Record<string, ScheduledAvailabilityStatus>;
+  createdAt: number;
+  createdBy: string;
 }
 
 export type EventType =
@@ -108,6 +190,7 @@ export interface GameState {
   team1Id: string; // US
   team2Id: string; // THEM
   team2Name?: string; // GUEST TEAM TEMP NAME
+  gameLocation?: string;
   score1: number;
   score2: number;
   possession: string; // which team has the disc
@@ -138,6 +221,7 @@ export const INITIAL_GAME_STATE: GameState = {
   gameId: '',
   team1Id: '',
   team2Id: '',
+  gameLocation: '',
   score1: 0,
   score2: 0,
   possession: '',

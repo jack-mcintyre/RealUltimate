@@ -1,13 +1,23 @@
 import { Ionicons } from '@expo/vector-icons';
+import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { router } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { Image, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Alert, Image, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { auth } from '../../firebaseConfig';
 import { GameService } from '../services/GameService';
 import { TeamService } from '../services/TeamService';
-import { GameState, Team } from '../services/types';
+import { GameState, ScheduledAvailabilityStatus, ScheduledGame, Team } from '../services/types';
 import { getTypography, Layout } from '../theme/DesignSystem';
 import { ThemeColors, useTheme } from '../theme/ThemeContext';
+
+const dedupeTeams = (teams: Team[]): Team[] => {
+    const map = new Map<string, Team>();
+    teams.forEach((team) => {
+        if (!team?.id) return;
+        map.set(team.id, team);
+    });
+    return Array.from(map.values());
+};
 
 export default function TeamsHubScreen() {
     const [coachedTeams, setCoachedTeams] = useState<Team[]>([]);
@@ -15,16 +25,56 @@ export default function TeamsHubScreen() {
 
     const [liveGameDetails, setLiveGameDetails] = useState<Record<string, GameState>>({});
     const [globalPastGames, setGlobalPastGames] = useState<GameState[]>([]);
+    const [scheduledGamesByTeam, setScheduledGamesByTeam] = useState<Record<string, ScheduledGame[]>>({});
+    const [teamDirectory, setTeamDirectory] = useState<Team[]>([]);
 
     const [teamMode, setTeamMode] = useState<'none' | 'create' | 'join'>('none');
     const [teamNameInput, setTeamNameInput] = useState('');
     const [accessCodeInput, setAccessCodeInput] = useState('');
+    const [showScheduleModal, setShowScheduleModal] = useState(false);
+    const [scheduleTeamId, setScheduleTeamId] = useState('');
+    const [scheduleOpponentName, setScheduleOpponentName] = useState('');
+    const [scheduleOpponentSearch, setScheduleOpponentSearch] = useState('');
+    const [scheduleOpponentTeamId, setScheduleOpponentTeamId] = useState('');
+    const [scheduleDate, setScheduleDate] = useState<Date | null>(null);
+    const [scheduleTime, setScheduleTime] = useState<Date | null>(null);
+    const [showDatePicker, setShowDatePicker] = useState(false);
+    const [showTimePicker, setShowTimePicker] = useState(false);
+    const [scheduleLocationInput, setScheduleLocationInput] = useState('');
+    const [scheduleAvailability, setScheduleAvailability] = useState<Record<string, ScheduledAvailabilityStatus>>({});
+    const [scheduleFormError, setScheduleFormError] = useState('');
+    const [isSavingSchedule, setIsSavingSchedule] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
 
     const { isDark, colors } = useTheme();
     const styles = getStyles(colors);
 
     const user = auth.currentUser;
+    const scheduledGames = useMemo(
+        () => Object.values(scheduledGamesByTeam).flat().sort((a, b) => {
+            const aTime = typeof a.scheduledAt === 'number' ? a.scheduledAt : Number.MAX_SAFE_INTEGER;
+            const bTime = typeof b.scheduledAt === 'number' ? b.scheduledAt : Number.MAX_SAFE_INTEGER;
+            if (aTime !== bTime) return aTime - bTime;
+            return (a.createdAt || 0) - (b.createdAt || 0);
+        }),
+        [scheduledGamesByTeam]
+    );
+    const selectedScheduleOpponent = scheduleOpponentTeamId
+        ? teamDirectory.find((team) => team.id === scheduleOpponentTeamId) || null
+        : null;
+    const selectedScheduleTeam = coachedTeams.find((team) => team.id === scheduleTeamId) || null;
+    const selectedSchedulePlayers = selectedScheduleTeam?.players ? Object.values(selectedScheduleTeam.players) : [];
+    const scheduleOpponentResults = useMemo(
+        () => teamDirectory
+            .filter((team) => team.id !== scheduleTeamId)
+            .filter((team) => {
+                const q = scheduleOpponentSearch.trim().toLowerCase();
+                if (!q) return false;
+                return team.name.toLowerCase().includes(q);
+            })
+            .slice(0, 6),
+        [teamDirectory, scheduleTeamId, scheduleOpponentSearch]
+    );
 
     useEffect(() => {
         if (!user) return;
@@ -34,6 +84,58 @@ export default function TeamsHubScreen() {
         });
         return () => unsubscribe();
     }, [user]);
+
+    useEffect(() => {
+        if (!user?.uid) return;
+        let disposed = false;
+
+        TeamService.getAllTeams()
+            .then((teams) => {
+                if (disposed) return;
+                if (teams.length > 0) {
+                    setTeamDirectory(teams);
+                    return;
+                }
+
+                setTeamDirectory(dedupeTeams([...coachedTeams, ...spectatedTeams]));
+            })
+            .catch(() => {
+                if (disposed) return;
+                setTeamDirectory(dedupeTeams([...coachedTeams, ...spectatedTeams]));
+            });
+
+        return () => {
+            disposed = true;
+        };
+    }, [user?.uid, coachedTeams, spectatedTeams]);
+
+    useEffect(() => {
+        if (coachedTeams.length === 0) {
+            setScheduledGamesByTeam({});
+            return;
+        }
+
+        const unsubscribers = coachedTeams.map((team) =>
+            TeamService.subscribeToScheduledGames(team.id, (games) => {
+                setScheduledGamesByTeam((prev) => ({ ...prev, [team.id]: games }));
+            })
+        );
+
+        return () => {
+            unsubscribers.forEach((unsubscribe) => unsubscribe());
+        };
+    }, [coachedTeams]);
+
+    useEffect(() => {
+        if (coachedTeams.length === 0) {
+            setScheduleTeamId('');
+            return;
+        }
+
+        if (!scheduleTeamId || !coachedTeams.some((team) => team.id === scheduleTeamId)) {
+            setScheduleTeamId(coachedTeams[0].id);
+        }
+    }, [coachedTeams, scheduleTeamId]);
 
     // Fetch Live Games Details to get Opponent Names
     useEffect(() => {
@@ -120,6 +222,130 @@ export default function TeamsHubScreen() {
         } finally {
             setIsLoading(false);
         }
+    };
+
+    const openScheduleModal = () => {
+        if (coachedTeams.length === 0) {
+            Alert.alert('No coached teams', 'Create or join a team as coach before scheduling games.');
+            return;
+        }
+
+        setScheduleTeamId((prev) => prev || coachedTeams[0].id);
+        setScheduleOpponentName('');
+        setScheduleOpponentSearch('');
+        setScheduleOpponentTeamId('');
+        setScheduleDate(null);
+        setScheduleTime(null);
+        setScheduleLocationInput('');
+        setScheduleAvailability({});
+        setScheduleFormError('');
+        setShowDatePicker(false);
+        setShowTimePicker(false);
+        setShowScheduleModal(true);
+    };
+
+    const handleScheduleDateChange = (_event: DateTimePickerEvent, selected?: Date) => {
+        if (Platform.OS === 'android') setShowDatePicker(false);
+        if (!selected) return;
+        setScheduleDate(selected);
+    };
+
+    const handleScheduleTimeChange = (_event: DateTimePickerEvent, selected?: Date) => {
+        if (Platform.OS === 'android') setShowTimePicker(false);
+        if (!selected) return;
+        setScheduleTime(selected);
+    };
+
+    const handleCreateScheduledGame = async () => {
+        if (!user) return;
+        setScheduleFormError('');
+
+        const selectedTeam = coachedTeams.find((team) => team.id === scheduleTeamId);
+        if (!selectedTeam) {
+            setScheduleFormError('Choose which coached team this game is for.');
+            return;
+        }
+
+        const opponentName = selectedScheduleOpponent?.name || scheduleOpponentName.trim();
+        if (!opponentName) {
+            setScheduleFormError('Select or enter an opponent name.');
+            return;
+        }
+
+        let scheduledAt: number | undefined;
+        if (scheduleDate) {
+            const mergedDateTime = new Date(scheduleDate);
+            if (scheduleTime) {
+                mergedDateTime.setHours(scheduleTime.getHours(), scheduleTime.getMinutes(), 0, 0);
+            } else {
+                mergedDateTime.setHours(23, 59, 0, 0);
+            }
+            scheduledAt = mergedDateTime.getTime();
+            if (!Number.isFinite(scheduledAt)) {
+                setScheduleFormError('Please choose a valid date and time.');
+                return;
+            }
+
+            if (scheduledAt <= Date.now()) {
+                setScheduleFormError('Scheduled games must be in the future.');
+                return;
+            }
+        }
+
+        try {
+            setIsSavingSchedule(true);
+            await TeamService.createScheduledGame(selectedTeam.id, {
+                teamName: selectedTeam.name,
+                opponentName,
+                opponentTeamId: selectedScheduleOpponent?.id || '',
+                location: scheduleLocationInput.trim(),
+                scheduledAt,
+                availability: scheduleAvailability,
+                createdBy: user.uid,
+            });
+
+            setShowScheduleModal(false);
+            setScheduleOpponentName('');
+            setScheduleOpponentSearch('');
+            setScheduleOpponentTeamId('');
+            setScheduleDate(null);
+            setScheduleTime(null);
+            setScheduleLocationInput('');
+            setScheduleAvailability({});
+            setShowDatePicker(false);
+            setShowTimePicker(false);
+        } catch (error) {
+            setScheduleFormError('Could not save scheduled game. Please try again.');
+        } finally {
+            setIsSavingSchedule(false);
+        }
+    };
+
+    const toGoogleCalendarDate = (timestamp: number) => {
+        return new Date(timestamp).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+    };
+
+    const handleOpenCalendar = async (game: ScheduledGame) => {
+        if (typeof game.scheduledAt !== 'number') {
+            Alert.alert('Date/Time Needed', 'Set date and time first before exporting to calendar.');
+            return;
+        }
+
+        const start = game.scheduledAt;
+        const end = start + (2 * 60 * 60 * 1000);
+        const params = new URLSearchParams({
+            action: 'TEMPLATE',
+            text: `${game.teamName} vs ${game.opponentName}`,
+            dates: `${toGoogleCalendarDate(start)}/${toGoogleCalendarDate(end)}`,
+            details: `Scheduled via RealUltimate${game.location ? `\nLocation: ${game.location}` : ''}`,
+            location: game.location || '',
+        });
+
+        await Linking.openURL(`https://calendar.google.com/calendar/render?${params.toString()}`);
+    };
+
+    const handleScheduleAvailability = (playerId: string, status: ScheduledAvailabilityStatus) => {
+        setScheduleAvailability((prev) => ({ ...prev, [playerId]: status }));
     };
 
     return (
@@ -312,6 +538,98 @@ export default function TeamsHubScreen() {
                             )}
                         </View>
 
+                        {/* Scheduled Games Section */}
+                        {coachedTeams.length > 0 && (
+                            <View style={styles.sectionContainer}>
+                                <View style={styles.sectionHeader}>
+                                    <Ionicons name="calendar-outline" size={18} color={colors.primary} style={{ marginRight: 8 }} />
+                                    <Text style={styles.sectionTitle}>SCHEDULED GAMES</Text>
+                                </View>
+
+                                {scheduledGames.length === 0 ? (
+                                    <View style={styles.emptyStateCard}>
+                                        <Ionicons name="calendar-clear-outline" size={38} color={colors.border} />
+                                        <Text style={styles.emptyStateText}>No scheduled games yet.</Text>
+                                        <TouchableOpacity style={[styles.primaryButton, { marginTop: 14, marginBottom: 0 }]} onPress={openScheduleModal} activeOpacity={0.85}>
+                                            <Ionicons name="add-circle-outline" size={18} color={colors.onPrimary} style={{ marginRight: 8 }} />
+                                            <Text style={styles.primaryButtonText}>Schedule Future Game</Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                ) : scheduledGames.map((game) => {
+                                    const hasDateTime = typeof game.scheduledAt === 'number';
+                                    const gameDate = hasDateTime ? new Date(game.scheduledAt as number) : null;
+                                    const selectedTeamForCard = coachedTeams.find((team) => team.id === game.teamId);
+                                    const yesNames = Object.entries(game.availability || {})
+                                        .filter(([, status]) => status === 'yes')
+                                        .map(([playerId]) => selectedTeamForCard?.players?.[playerId]?.name || 'Unknown');
+                                    const noNames = Object.entries(game.availability || {})
+                                        .filter(([, status]) => status === 'no')
+                                        .map(([playerId]) => selectedTeamForCard?.players?.[playerId]?.name || 'Unknown');
+
+                                    return (
+                                        <TouchableOpacity
+                                            key={`scheduled-${game.id}`}
+                                            style={styles.scheduledCard}
+                                            activeOpacity={0.88}
+                                            onPress={() => router.push({
+                                                pathname: '/game/scheduled/[teamId]/[gameId]',
+                                                params: {
+                                                    teamId: game.teamId,
+                                                    gameId: game.id,
+                                                },
+                                            } as any)}
+                                        >
+                                            <Text style={styles.cardTitle}>{game.teamName} vs {game.opponentName}</Text>
+
+                                            <Text style={styles.cardSubtitle}>
+                                                {gameDate
+                                                    ? `${gameDate.toLocaleDateString()} • ${gameDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                                                    : 'Date/Time TBD'}
+                                            </Text>
+                                            <Text style={styles.cardSubtitle} numberOfLines={2}>In: {yesNames.length ? yesNames.join(', ') : 'TBD'}</Text>
+                                            <Text style={styles.cardSubtitle} numberOfLines={2}>Out: {noNames.length ? noNames.join(', ') : 'None listed'}</Text>
+
+                                            <View style={styles.scheduledActionRow}>
+                                                <TouchableOpacity
+                                                    style={styles.scheduledActionBtn}
+                                                    onPress={(e) => {
+                                                        e.stopPropagation();
+                                                        router.push({
+                                                            pathname: '/game/record/[teamId]',
+                                                            params: {
+                                                                teamId: game.teamId,
+                                                                scheduledGameId: game.id,
+                                                                prefOpponentName: game.opponentName,
+                                                                prefOpponentTeamId: game.opponentTeamId || '',
+                                                                prefLocation: game.location || '',
+                                                            }
+                                                        } as any);
+                                                    }}
+                                                    activeOpacity={0.8}
+                                                >
+                                                    <Ionicons name="play" size={14} color={colors.primary} />
+                                                    <Text style={styles.scheduledActionText}>Start</Text>
+                                                </TouchableOpacity>
+
+                                                <TouchableOpacity
+                                                    style={[styles.scheduledActionBtn, !hasDateTime && styles.scheduledActionBtnDisabled]}
+                                                    onPress={(e) => {
+                                                        e.stopPropagation();
+                                                        handleOpenCalendar(game);
+                                                    }}
+                                                    disabled={!hasDateTime}
+                                                    activeOpacity={0.8}
+                                                >
+                                                    <Ionicons name="calendar-outline" size={14} color={hasDateTime ? colors.primary : colors.textSecondary} />
+                                                    <Text style={[styles.scheduledActionText, !hasDateTime && styles.scheduledActionTextDisabled]}>Calendar</Text>
+                                                </TouchableOpacity>
+                                            </View>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                            </View>
+                        )}
+
                         {/* Global Past Games Section */}
                         {globalPastGames.length > 0 && (
                             <View style={styles.sectionContainer}>
@@ -375,11 +693,224 @@ export default function TeamsHubScreen() {
                                 </View>
                                 <Text style={styles.actionGridText}>Join Team</Text>
                             </TouchableOpacity>
+                            <TouchableOpacity style={styles.actionGridItem} onPress={openScheduleModal} activeOpacity={0.8}>
+                                <View style={[styles.actionGridIconBox, { backgroundColor: colors.primaryLight }]}>
+                                    <Ionicons name="calendar" size={24} color={colors.primary} />
+                                </View>
+                                <Text style={styles.actionGridText}>Schedule Game</Text>
+                            </TouchableOpacity>
                         </View>
 
                     </View>
                 )}
             </ScrollView>
+
+            <Modal visible={showScheduleModal} animationType="slide" transparent>
+                <View style={styles.modalOverlay}>
+                    <View style={styles.scheduleModalCard}>
+                        <Text style={styles.scheduleModalTitle}>Schedule Future Game</Text>
+
+                        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 8 }}>
+
+                        <Text style={styles.formLabel}>Coach Team</Text>
+                        <View style={styles.teamChipsRow}>
+                            {coachedTeams.map((team) => (
+                                <TouchableOpacity
+                                    key={`schedule-team-${team.id}`}
+                                    style={[styles.teamChip, scheduleTeamId === team.id && styles.teamChipActive]}
+                                    onPress={() => {
+                                        setScheduleTeamId(team.id);
+                                        setScheduleAvailability({});
+                                    }}
+                                    activeOpacity={0.8}
+                                >
+                                    <Text style={[styles.teamChipText, scheduleTeamId === team.id && styles.teamChipTextActive]}>{team.name}</Text>
+                                </TouchableOpacity>
+                            ))}
+                        </View>
+
+                        <Text style={styles.formLabel}>Opponent Team Search</Text>
+                        <TextInput
+                            style={styles.input}
+                            placeholder="Search team list"
+                            placeholderTextColor={colors.textSecondary}
+                            value={scheduleOpponentSearch}
+                            onChangeText={(value) => {
+                                setScheduleOpponentSearch(value);
+                                if (!value.trim()) {
+                                    setScheduleOpponentTeamId('');
+                                    return;
+                                }
+
+                                if (selectedScheduleOpponent && value.trim().toLowerCase() !== selectedScheduleOpponent.name.trim().toLowerCase()) {
+                                    setScheduleOpponentTeamId('');
+                                }
+                            }}
+                        />
+
+                        {!!selectedScheduleOpponent && (
+                            <View style={styles.selectedScheduleOpponentRow}>
+                                <Text style={styles.cardSubtitle}>{selectedScheduleOpponent.name}</Text>
+                                <TouchableOpacity onPress={() => setScheduleOpponentTeamId('')}>
+                                    <Ionicons name="close-circle" size={18} color={colors.primary} />
+                                </TouchableOpacity>
+                            </View>
+                        )}
+
+                        {!selectedScheduleOpponent && scheduleOpponentResults.map((team) => (
+                            <TouchableOpacity
+                                key={`schedule-opp-${team.id}`}
+                                style={styles.scheduleOpponentRow}
+                                onPress={() => {
+                                    setScheduleOpponentTeamId(team.id);
+                                    setScheduleOpponentName(team.name);
+                                    setScheduleOpponentSearch(team.name);
+                                }}
+                                activeOpacity={0.75}
+                            >
+                                <Text style={styles.cardSubtitle}>{team.name}</Text>
+                                <Ionicons name="arrow-forward" size={16} color={colors.textSecondary} />
+                            </TouchableOpacity>
+                        ))}
+
+                        {!selectedScheduleOpponent && scheduleOpponentSearch.trim().length > 0 && scheduleOpponentResults.length === 0 && (
+                            <View style={styles.opponentEmptyHintRow}>
+                                <Text style={styles.cardSubtitle}>No teams matched that search. You can still enter a guest opponent name below.</Text>
+                            </View>
+                        )}
+
+                        <Text style={styles.formLabel}>Opponent Name (Guest Optional)</Text>
+                        <TextInput
+                            style={styles.input}
+                            placeholder="e.g. Rival University"
+                            placeholderTextColor={colors.textSecondary}
+                            value={scheduleOpponentName}
+                            onChangeText={(value) => {
+                                setScheduleOpponentName(value);
+                                if (!selectedScheduleOpponent || value !== selectedScheduleOpponent.name) {
+                                    setScheduleOpponentTeamId('');
+                                }
+                            }}
+                        />
+
+                        <View style={styles.rowInputs}>
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.formLabel}>Date</Text>
+                                <TouchableOpacity
+                                    style={styles.dateTimePickerBtn}
+                                    onPress={() => setShowDatePicker(true)}
+                                    activeOpacity={0.8}
+                                >
+                                    <Ionicons name="calendar-outline" size={18} color={colors.primary} />
+                                    <Text style={styles.dateTimePickerText}>
+                                        {scheduleDate ? scheduleDate.toLocaleDateString() : 'Select Date'}
+                                    </Text>
+                                </TouchableOpacity>
+                            </View>
+                            <View style={{ width: 12 }} />
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.formLabel}>Time</Text>
+                                <TouchableOpacity
+                                    style={styles.dateTimePickerBtn}
+                                    onPress={() => setShowTimePicker(true)}
+                                    activeOpacity={0.8}
+                                >
+                                    <Ionicons name="time-outline" size={18} color={colors.primary} />
+                                    <Text style={styles.dateTimePickerText}>
+                                        {scheduleTime
+                                            ? scheduleTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                                            : 'Select Time'}
+                                    </Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+
+                        {showDatePicker && (
+                            <DateTimePicker
+                                value={scheduleDate || new Date(Date.now() + 60 * 60 * 1000)}
+                                mode="date"
+                                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                minimumDate={new Date()}
+                                onChange={handleScheduleDateChange}
+                            />
+                        )}
+
+                        {showTimePicker && (
+                            <DateTimePicker
+                                value={scheduleTime || new Date()}
+                                mode="time"
+                                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                                onChange={handleScheduleTimeChange}
+                            />
+                        )}
+
+                        <Text style={styles.formLabel}>Location (Optional)</Text>
+                        <TextInput
+                            style={styles.input}
+                            placeholder="e.g. Main Turf"
+                            placeholderTextColor={colors.textSecondary}
+                            value={scheduleLocationInput}
+                            onChangeText={setScheduleLocationInput}
+                        />
+
+                        <Text style={styles.formLabel}>Player Availability</Text>
+                        {selectedSchedulePlayers.length > 0 ? (
+                            selectedSchedulePlayers.map((player) => {
+                                const status = scheduleAvailability[player.id];
+                                return (
+                                    <View key={`availability-${player.id}`} style={styles.availabilityRow}>
+                                        <Text style={styles.availabilityName}>{player.name}</Text>
+                                        <View style={styles.availabilityControls}>
+                                            <TouchableOpacity
+                                                style={[styles.availabilityBtn, status === 'yes' && styles.availabilityBtnYesActive]}
+                                                onPress={() => handleScheduleAvailability(player.id, 'yes')}
+                                                activeOpacity={0.8}
+                                            >
+                                                <Ionicons name="checkmark" size={14} color={status === 'yes' ? '#fff' : colors.success} />
+                                            </TouchableOpacity>
+                                            <TouchableOpacity
+                                                style={[styles.availabilityBtn, status === 'no' && styles.availabilityBtnNoActive]}
+                                                onPress={() => handleScheduleAvailability(player.id, 'no')}
+                                                activeOpacity={0.8}
+                                            >
+                                                <Ionicons name="close" size={14} color={status === 'no' ? '#fff' : colors.error} />
+                                            </TouchableOpacity>
+                                        </View>
+                                    </View>
+                                );
+                            })
+                        ) : (
+                            <Text style={styles.cardSubtitle}>Add players to this team to set availability.</Text>
+                        )}
+
+                        {!!scheduleFormError && (
+                            <View style={styles.formErrorBox}>
+                                <Ionicons name="warning-outline" size={16} color={colors.error} />
+                                <Text style={styles.formErrorText}>{scheduleFormError}</Text>
+                            </View>
+                        )}
+
+                        <Text style={styles.scheduleHintText}>Date and time are optional. Leave both blank for Date/Time TBD.</Text>
+
+                        </ScrollView>
+
+                        <View style={styles.modalButtonRow}>
+                            <TouchableOpacity style={styles.modalGhostBtn} onPress={() => setShowScheduleModal(false)} activeOpacity={0.8}>
+                                <Text style={styles.textButtonText}>Cancel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.primaryButton, { flex: 1, marginBottom: 0, opacity: isSavingSchedule ? 0.8 : 1 }]}
+                                onPress={handleCreateScheduledGame}
+                                activeOpacity={0.8}
+                                disabled={isSavingSchedule}
+                            >
+                                <Ionicons name="calendar" size={18} color={colors.onPrimary} style={{ marginRight: 8 }} />
+                                <Text style={styles.primaryButtonText}>{isSavingSchedule ? 'Saving...' : 'Save Scheduled Game'}</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
         </KeyboardAvoidingView>
     );
 }
@@ -413,10 +944,40 @@ const getStyles = (colors: ThemeColors) => {
         playIconContainer: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.error, alignItems: 'center', justifyContent: 'center', paddingLeft: 4 },
 
         // Action Grid
-        actionGrid: { flexDirection: 'row', gap: 16, marginBottom: 32 },
-        actionGridItem: { flex: 1, backgroundColor: colors.surface, padding: 20, borderRadius: Layout.radiusLg, borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
+        actionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 16, marginBottom: 32 },
+        actionGridItem: { width: '30%', minWidth: 120, backgroundColor: colors.surface, padding: 20, borderRadius: Layout.radiusLg, borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
         actionGridIconBox: { width: 48, height: 48, borderRadius: Layout.radiusSm, backgroundColor: colors.primaryLight, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
         actionGridText: { ...Typography.body, fontWeight: '600' },
+
+        // Scheduled cards
+        scheduledCard: {
+            backgroundColor: colors.surface,
+            borderRadius: Layout.radiusLg,
+            padding: 16,
+            marginBottom: 12,
+            borderWidth: 1,
+            borderColor: colors.primary,
+            ...Layout.shadow,
+        },
+        scheduledActionRow: { flexDirection: 'row', gap: 8, marginTop: 10, marginBottom: 8 },
+        scheduledActionBtn: {
+            flex: 1,
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 6,
+            borderWidth: 1,
+            borderColor: colors.primary,
+            backgroundColor: colors.primaryLight,
+            borderRadius: Layout.radiusSm,
+            paddingVertical: 8,
+        },
+        scheduledActionBtnDisabled: {
+            borderColor: colors.border,
+            backgroundColor: colors.surfaceSecondary,
+        },
+        scheduledActionText: { ...Typography.bodySmall, color: colors.primary, fontWeight: '700' },
+        scheduledActionTextDisabled: { color: colors.textSecondary },
 
         // Standard Cards
         standardCard: { backgroundColor: colors.surface, borderRadius: Layout.radiusLg, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
@@ -441,5 +1002,137 @@ const getStyles = (colors: ThemeColors) => {
         primaryButtonText: { ...Typography.button, color: colors.onPrimary },
         textButton: { padding: 16, alignItems: 'center' },
         textButtonText: { ...Typography.button, color: colors.textSecondary },
+
+        // Scheduling modal
+        modalOverlay: {
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.55)',
+            justifyContent: 'center',
+            alignItems: 'center',
+            padding: 16,
+        },
+        scheduleModalCard: {
+            width: '100%',
+            maxWidth: 520,
+            maxHeight: '90%',
+            backgroundColor: colors.surface,
+            borderRadius: Layout.radiusLg,
+            padding: 20,
+            borderWidth: 1,
+            borderColor: colors.border,
+            ...Layout.shadow,
+        },
+        scheduleModalTitle: { ...Typography.title, fontSize: 20, marginBottom: 14 },
+        teamChipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 },
+        teamChip: {
+            backgroundColor: colors.surfaceSecondary,
+            borderWidth: 1,
+            borderColor: colors.border,
+            borderRadius: Layout.radiusSm,
+            paddingHorizontal: 10,
+            paddingVertical: 8,
+        },
+        teamChipActive: { borderColor: colors.primary, backgroundColor: colors.primaryLight },
+        teamChipText: { ...Typography.bodySmall, color: colors.textSecondary },
+        teamChipTextActive: { color: colors.primary, fontWeight: '700' },
+        scheduleOpponentRow: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            backgroundColor: colors.surfaceSecondary,
+            borderWidth: 1,
+            borderColor: colors.border,
+            borderRadius: Layout.radiusSm,
+            paddingHorizontal: 10,
+            paddingVertical: 8,
+            marginBottom: 8,
+        },
+        selectedScheduleOpponentRow: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            borderWidth: 1,
+            borderColor: colors.primary,
+            backgroundColor: colors.primaryLight,
+            borderRadius: Layout.radiusSm,
+            paddingHorizontal: 10,
+            paddingVertical: 8,
+            marginBottom: 12,
+        },
+        opponentEmptyHintRow: {
+            backgroundColor: colors.surfaceSecondary,
+            borderWidth: 1,
+            borderColor: colors.border,
+            borderRadius: Layout.radiusSm,
+            paddingHorizontal: 10,
+            paddingVertical: 10,
+            marginBottom: 10,
+        },
+        dateTimePickerBtn: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+            backgroundColor: colors.surfaceSecondary,
+            borderWidth: 1,
+            borderColor: colors.border,
+            borderRadius: Layout.radiusMd,
+            paddingHorizontal: 12,
+            paddingVertical: 14,
+            marginBottom: 14,
+        },
+        dateTimePickerText: { ...Typography.body, color: colors.text },
+        rowInputs: { flexDirection: 'row', alignItems: 'flex-start' },
+        modalButtonRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+        modalGhostBtn: {
+            flex: 1,
+            paddingVertical: 14,
+            borderRadius: Layout.radiusMd,
+            borderWidth: 1,
+            borderColor: colors.border,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: colors.surfaceSecondary,
+        },
+        availabilityRow: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            borderWidth: 1,
+            borderColor: colors.border,
+            backgroundColor: colors.surfaceSecondary,
+            borderRadius: Layout.radiusSm,
+            paddingHorizontal: 10,
+            paddingVertical: 8,
+            marginBottom: 8,
+        },
+        availabilityName: { ...Typography.bodySmall, color: colors.text, fontWeight: '600', flex: 1, paddingRight: 8 },
+        availabilityControls: { flexDirection: 'row', gap: 8 },
+        availabilityBtn: {
+            width: 32,
+            height: 32,
+            borderRadius: 16,
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderWidth: 1,
+            borderColor: colors.border,
+            backgroundColor: colors.surface,
+        },
+        availabilityBtnYesActive: { backgroundColor: colors.success, borderColor: colors.success },
+        availabilityBtnNoActive: { backgroundColor: colors.error, borderColor: colors.error },
+        formErrorBox: {
+            marginTop: 8,
+            marginBottom: 6,
+            borderWidth: 1,
+            borderColor: colors.error,
+            backgroundColor: colors.errorBg,
+            borderRadius: Layout.radiusSm,
+            paddingHorizontal: 10,
+            paddingVertical: 8,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 6,
+        },
+        formErrorText: { ...Typography.bodySmall, color: colors.error, flex: 1 },
+        scheduleHintText: { ...Typography.bodySmall, color: colors.textSecondary, marginTop: 2 },
     });
 }

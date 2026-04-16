@@ -1,6 +1,6 @@
-import { onValue, push, ref, set, get, update, runTransaction } from 'firebase/database';
+import { get, onValue, push, ref, runTransaction, set, update } from 'firebase/database';
 import { db } from '../../firebaseConfig';
-import { SpectatorReaction, PredictionSnapshot } from './types';
+import { PredictionSnapshot, SpectatorReaction } from './types';
 
 export const InteractionService = {
     // --- EMOJI REACTIONS ---
@@ -41,24 +41,43 @@ export const InteractionService = {
     // --- LIVE PREDICTIONS ---
     castVote: async (gameId: string, userId: string, votedTeamId: string, team1Id: string, team2Id: string) => {
         const predRef = ref(db, `games/${gameId}/predictions`);
-        const snap = await get(predRef);
-        const current = snap.val() || { team1Votes: 0, team2Votes: 0, voters: {} };
+        await runTransaction(predRef, (current) => {
+            const next = current || { team1Votes: 0, team2Votes: 0, voters: {} };
+            if (votedTeamId !== team1Id && votedTeamId !== team2Id) {
+                return next;
+            }
 
-        // Check if user already voted
-        const previousVote = current.voters?.[userId];
-        if (previousVote === votedTeamId) return; // No change
+            const voters = next.voters || {};
+            const previousVote = voters[userId];
+            if (previousVote === votedTeamId) {
+                return next;
+            }
 
-        // Adjust counts
-        if (previousVote) {
-            // Switching vote
-            if (previousVote === team1Id) { current.team1Votes = Math.max(0, current.team1Votes - 1); }
-            else { current.team2Votes = Math.max(0, current.team2Votes - 1); }
-        }
-        if (votedTeamId === team1Id) { current.team1Votes += 1; }
-        else { current.team2Votes += 1; }
+            let team1Votes = Number(next.team1Votes) || 0;
+            let team2Votes = Number(next.team2Votes) || 0;
 
-        current.voters = { ...current.voters, [userId]: votedTeamId };
-        await set(predRef, current);
+            if (previousVote === team1Id) {
+                team1Votes = Math.max(0, team1Votes - 1);
+            } else if (previousVote === team2Id) {
+                team2Votes = Math.max(0, team2Votes - 1);
+            }
+
+            if (votedTeamId === team1Id) {
+                team1Votes += 1;
+            } else {
+                team2Votes += 1;
+            }
+
+            return {
+                ...next,
+                team1Votes,
+                team2Votes,
+                voters: {
+                    ...voters,
+                    [userId]: votedTeamId,
+                },
+            };
+        });
     },
 
     // Save a prediction snapshot for the replay chart

@@ -1,8 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Animated, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
 import { auth } from '../../../firebaseConfig';
+import BrandedDialog from '../../../src/components/BrandedDialog';
 import { useGame } from '../../hooks/useGame';
 import { GameService } from '../../services/GameService';
 import { TeamService } from '../../services/TeamService';
@@ -383,7 +385,19 @@ const buildLineAssistIntel = (team: Team | null, pastGames: GameState[]): LineAs
 };
 
 export default function RecorderScreen() {
-    const { teamId } = useLocalSearchParams<{ teamId: string }>();
+    const {
+        teamId,
+        scheduledGameId,
+        prefOpponentName,
+        prefOpponentTeamId,
+        prefLocation,
+    } = useLocalSearchParams<{
+        teamId: string;
+        scheduledGameId?: string;
+        prefOpponentName?: string;
+        prefOpponentTeamId?: string;
+        prefLocation?: string;
+    }>();
     const { colors } = useTheme();
     const styles = getStyles(colors);
 
@@ -391,9 +405,12 @@ export default function RecorderScreen() {
     const [opponentAccessCode, setOpponentAccessCode] = useState('');
     const [opponentName, setOpponentName] = useState('');
     const [opponentTeam, setOpponentTeam] = useState<Team | null>(null);
+    const [allTeams, setAllTeams] = useState<Team[]>([]);
+    const [opponentSearch, setOpponentSearch] = useState('');
+    const [selectedOpponentTeamId, setSelectedOpponentTeamId] = useState<string | null>(null);
 
     const [selectedPlayer, setSelectedPlayer] = useState<string | null>(null);
-    const { gameState, recordEvent, undo, canUndo, startGame, endGame, handOffRecording } = useGame(ourTeam?.activeGameId || undefined);
+    const { gameState, recordEvent, undo, canUndo, startGame, endGame, updateStreamUrl, handOffRecording } = useGame(ourTeam?.activeGameId || undefined);
 
     const [activeLineup, setActiveLineup] = useState<string[]>([]);
 
@@ -402,10 +419,20 @@ export default function RecorderScreen() {
     const [fieldMapSetup, setFieldMapSetup] = useState(false);
     const [sotgEnabledSetup, setSotgEnabledSetup] = useState(false);
     const [streamUrlSetup, setStreamUrlSetup] = useState('');
+    const [gameLocationSetup, setGameLocationSetup] = useState('');
     const [showSotgModal, setShowSotgModal] = useState(false);
+    const [showMapGuideModal, setShowMapGuideModal] = useState(false);
+    const [showLineIntelHelp, setShowLineIntelHelp] = useState(false);
+    const [showEndGameConfirm, setShowEndGameConfirm] = useState(false);
+    const [endGameConfirmCopy, setEndGameConfirmCopy] = useState({
+        title: 'End Match',
+        message: 'Finalize and view match report?',
+    });
     const [sotgForm, setSotgForm] = useState({ rules: 2, fouls: 2, fairness: 2, attitude: 2, communication: 2 });
     const [prepGames, setPrepGames] = useState<GameState[]>([]);
     const [isPrepIntelLoading, setIsPrepIntelLoading] = useState(false);
+    const [inGameStreamUrl, setInGameStreamUrl] = useState('');
+    const [isSavingLiveStream, setIsSavingLiveStream] = useState(false);
     
     // In-Game Advanced Tracking
     const [discHolderId, setDiscHolderId] = useState<string | null>(null);
@@ -425,6 +452,21 @@ export default function RecorderScreen() {
     // Check if current user is the active recorder
     const currentUserId = auth.currentUser?.uid;
     const isActiveRecorder = !gameState.currentRecorderId || gameState.currentRecorderId === currentUserId;
+    const hasAppliedPrefillRef = useRef(false);
+
+    const selectedOpponentTeam = selectedOpponentTeamId
+        ? allTeams.find((team) => team.id === selectedOpponentTeamId) || null
+        : null;
+
+    const filteredOpponentTeams = allTeams
+        .filter((team) => team.id !== ourTeam?.id)
+        .filter((team) => {
+            const query = opponentSearch.trim().toLowerCase();
+            if (!query) return false;
+            return team.name.toLowerCase().includes(query);
+        })
+        .slice(0, 6);
+    const hasOpponentSearchQuery = opponentSearch.trim().length > 0;
 
     // Show multi-recorder warning if someone else is recording
     useEffect(() => {
@@ -441,6 +483,94 @@ export default function RecorderScreen() {
             setSelectedPlayer(discHolderId);
         }
     }, [discHolderId, gameState.possession, gameState.advancedTracking, gameState.isGameActive]);
+
+    useEffect(() => {
+        let isCancelled = false;
+        let fallbackUnsubscribe: (() => void) | undefined;
+
+        const dedupeTeams = (teams: Team[]) => {
+            const keyed = new Map<string, Team>();
+            teams.forEach((entry) => {
+                if (!entry?.id || !entry?.name) return;
+                if (!keyed.has(entry.id)) keyed.set(entry.id, entry);
+            });
+            return Array.from(keyed.values());
+        };
+
+        TeamService.getAllTeams()
+            .then((teams) => {
+                if (isCancelled) return;
+
+                const normalized = dedupeTeams(teams);
+                if (normalized.length > 0) {
+                    setAllTeams(normalized);
+                    return;
+                }
+
+                const userId = auth.currentUser?.uid;
+                if (!userId) {
+                    setAllTeams([]);
+                    return;
+                }
+
+                fallbackUnsubscribe = TeamService.getTeamsForUser(userId, (coached, spectated) => {
+                    if (isCancelled) return;
+                    setAllTeams(dedupeTeams([...coached, ...spectated]));
+                });
+            })
+            .catch(() => {
+                if (!isCancelled) setAllTeams([]);
+            });
+
+        return () => {
+            isCancelled = true;
+            if (fallbackUnsubscribe) fallbackUnsubscribe();
+        };
+    }, []);
+
+    useEffect(() => {
+        if (hasAppliedPrefillRef.current) return;
+        const hasPrefill = !!(prefOpponentName || prefLocation || prefOpponentTeamId);
+        if (!hasPrefill) return;
+
+        if (prefOpponentName) {
+            setOpponentName(prefOpponentName);
+        }
+        if (prefLocation) {
+            setGameLocationSetup(prefLocation);
+        }
+
+        if (prefOpponentTeamId) {
+            setSelectedOpponentTeamId(prefOpponentTeamId);
+            setOpponentAccessCode('');
+            setOpponentSearch('');
+        }
+
+        hasAppliedPrefillRef.current = true;
+    }, [prefOpponentName, prefLocation, prefOpponentTeamId]);
+
+    useEffect(() => {
+        setInGameStreamUrl(gameState.streamUrl || '');
+    }, [gameState.streamUrl]);
+
+    useEffect(() => {
+        if (!gameState.isGameActive || !gameState.fieldMapEnabled) return;
+
+        let isMounted = true;
+        AsyncStorage.getItem('realultimate.mapGuideSeen.v1')
+            .then((value) => {
+                if (!isMounted || value === 'true') return;
+                setShowMapGuideModal(true);
+                return AsyncStorage.setItem('realultimate.mapGuideSeen.v1', 'true');
+            })
+            .catch(() => {
+                if (isMounted) setShowMapGuideModal(true);
+            });
+
+        return () => {
+            isMounted = false;
+        };
+    }, [gameState.isGameActive, gameState.fieldMapEnabled]);
 
     const normalizeCoord = (coord: FieldCoordinate | null | undefined): FieldCoordinate | undefined => {
         if (!coord) return undefined;
@@ -645,37 +775,49 @@ export default function RecorderScreen() {
         setIsLoading(true);
         try {
             let oppTeamId = '';
-            
-            if (opponentName.trim()) {
+            let opponentDisplayName = '';
+
+            if (selectedOpponentTeam) {
+                // Keep opponent team unlinked so this game does not write into their historical stats.
                 oppTeamId = '';
+                opponentDisplayName = selectedOpponentTeam.name;
+                setOpponentTeam(selectedOpponentTeam);
+            } else if (opponentName.trim()) {
+                opponentDisplayName = opponentName.trim();
+                setOpponentTeam(null);
             } else if (opponentAccessCode.trim()) {
-                const result = await TeamService.joinTeamByCode(opponentAccessCode.trim().toUpperCase(), currentUser.uid, currentUser.email || 'Unknown');
-                if (!result) {
+                const foundTeam = await TeamService.lookupTeamByAccessCode(opponentAccessCode.trim().toUpperCase());
+                if (!foundTeam) {
                     Alert.alert("Error", "Invalid Opponent Access Code.");
                     setIsLoading(false);
                     return;
                 }
-                oppTeamId = result.teamId;
+                // Same rule as searched teams: display opponent context only, do not dual-write stats.
+                oppTeamId = '';
+                opponentDisplayName = foundTeam.name;
+                setOpponentTeam(foundTeam);
             } else {
-                Alert.alert("Error", "Please enter either an Access Code or a Guest Team Name.");
+                Alert.alert("Error", "Please select or enter an opponent.");
                 setIsLoading(false);
                 return;
             }
 
-            if (oppTeamId) {
-                TeamService.subscribeToTeam(oppTeamId, (t) => setOpponentTeam(t));
-            } else {
-                setOpponentTeam(null);
-            }
-
             const initialPossessionId = firstPossession === 'US' ? ourTeam.id : oppTeamId;
-            const oppNameForGuest = opponentName.trim() ? opponentName.trim() : '';
 
             await startGame(
-                ourTeam.id, oppTeamId, oppNameForGuest, gameTarget, initialPossessionId, 
+                ourTeam.id,
+                oppTeamId,
+                opponentDisplayName,
+                gameLocationSetup.trim(),
+                gameTarget,
+                initialPossessionId,
                 advancedTrackingSetup, sotgEnabledSetup, streamUrlSetup, fieldMapSetup,
                 currentUser.uid
             );
+
+            if (scheduledGameId) {
+                await TeamService.removeScheduledGame(ourTeam.id, scheduledGameId, currentUser.uid);
+            }
 
         } catch (e) {
             console.error(e);
@@ -689,48 +831,31 @@ export default function RecorderScreen() {
         const isGameFinished = gameState.score1 >= gameState.gameTarget || gameState.score2 >= gameState.gameTarget;
 
         if (!isGameFinished) {
-            if (Platform.OS === 'web') {
-                const confirmed = window.confirm("End Match Early? Neither team has reached the target score. Are you sure you want to finalize this match?");
-                if (confirmed) proceedWithEndGame();
-            } else {
-                Alert.alert(
-                    "End Match Early?",
-                    "Neither team has reached the target score. Are you sure you want to finalize this match?",
-                    [
-                        { text: "Cancel", style: "cancel" },
-                        { text: "End Match", style: "destructive", onPress: proceedWithEndGame }
-                    ]
-                );
-            }
+            setEndGameConfirmCopy({
+                title: 'End Match Early?',
+                message: 'Neither team has reached the target score. Are you sure you want to finalize this match?',
+            });
         } else {
-            proceedWithEndGame();
+            setEndGameConfirmCopy({
+                title: 'End Match',
+                message: 'Finalize and view match report?',
+            });
         }
+
+        setShowEndGameConfirm(true);
     };
 
     const proceedWithEndGame = () => {
+        setShowEndGameConfirm(false);
+
         if (gameState.sotgEnabled) {
             setShowSotgModal(true);
             return;
         }
 
-        if (Platform.OS === 'web') {
-            const confirmed = window.confirm("Finalize and view match report?");
-            if (confirmed) {
-                endGame(gameState.gameId).then(() => router.replace({ pathname: '/game/history/[gameId]', params: { gameId: gameState.gameId, newGame: 'true' } }));
-            }
-        } else {
-            Alert.alert(
-                "End Game",
-                "Finalize and view match report?",
-                [
-                    { text: "Cancel", style: "cancel" },
-                    { text: "End Game", style: "destructive", onPress: async () => {
-                        await endGame(gameState.gameId);
-                        router.replace({ pathname: '/game/history/[gameId]', params: { gameId: gameState.gameId, newGame: 'true' } });
-                    }}
-                ]
-            );
-        }
+        endGame(gameState.gameId).then(() =>
+            router.replace({ pathname: '/game/history/[gameId]', params: { gameId: gameState.gameId, newGame: 'true' } })
+        );
     };
 
     const submitSotgAndEnd = async () => {
@@ -748,6 +873,19 @@ export default function RecorderScreen() {
             Alert.alert("Success", "You are now the active recorder!");
         } else {
             Alert.alert("Invalid PIN", "The PIN you entered does not match.");
+        }
+    };
+
+    const handleSaveInGameStream = async () => {
+        if (!gameState.isGameActive) return;
+        try {
+            setIsSavingLiveStream(true);
+            await updateStreamUrl(inGameStreamUrl);
+            Alert.alert('Saved', inGameStreamUrl.trim() ? 'Livestream link updated.' : 'Livestream link removed.');
+        } catch (error) {
+            Alert.alert('Error', 'Could not update livestream link.');
+        } finally {
+            setIsSavingLiveStream(false);
         }
     };
 
@@ -795,11 +933,98 @@ export default function RecorderScreen() {
                             <Ionicons name="cog" size={28} color={colors.primary} />
                             <Text style={styles.setupTitle}>Match Setup</Text>
                         </View>
+
+                        {!!scheduledGameId && (
+                            <View style={styles.scheduledPrefillBanner}>
+                                <Ionicons name="calendar" size={18} color={colors.primary} />
+                                <Text style={styles.scheduledPrefillText}>Starting from scheduled game details.</Text>
+                            </View>
+                        )}
+
+                        <Text style={styles.inputLabel}>SEARCH REGISTERED OPPONENT</Text>
+                        <TextInput
+                            style={styles.input}
+                            placeholder="Search team list"
+                            placeholderTextColor={colors.textSecondary}
+                            value={opponentSearch}
+                            onChangeText={(value) => {
+                                setOpponentSearch(value);
+                                if (!value.trim()) {
+                                    setSelectedOpponentTeamId(null);
+                                }
+                            }}
+                        />
+
+                        {selectedOpponentTeam && (
+                            <View style={styles.selectedOpponentChip}>
+                                <Text style={styles.selectedOpponentText}>{selectedOpponentTeam.name}</Text>
+                                <TouchableOpacity onPress={() => setSelectedOpponentTeamId(null)}>
+                                    <Ionicons name="close-circle" size={18} color={colors.primary} />
+                                </TouchableOpacity>
+                            </View>
+                        )}
+
+                        {!selectedOpponentTeam && filteredOpponentTeams.map((team) => (
+                            <TouchableOpacity
+                                key={team.id}
+                                style={styles.opponentResultRow}
+                                activeOpacity={0.75}
+                                onPress={() => {
+                                    setSelectedOpponentTeamId(team.id);
+                                    setOpponentName(team.name);
+                                    setOpponentAccessCode('');
+                                    setOpponentSearch(team.name);
+                                }}
+                            >
+                                <Text style={styles.opponentResultText}>{team.name}</Text>
+                                <Ionicons name="arrow-forward" size={16} color={colors.textSecondary} />
+                            </TouchableOpacity>
+                        ))}
+
+                        {!selectedOpponentTeam && hasOpponentSearchQuery && filteredOpponentTeams.length === 0 && (
+                            <View style={styles.opponentEmptyRow}>
+                                <Text style={styles.opponentEmptyText}>No teams matched this search yet.</Text>
+                            </View>
+                        )}
+
+                        <Text style={styles.dividerText}>or use code / manual name</Text>
                         <Text style={styles.inputLabel}>OPPONENT ACCESS CODE</Text>
-                        <TextInput style={[styles.input, { textTransform: 'uppercase', textAlign: 'center', letterSpacing: 4, fontSize: 20 }]} placeholder="XXXXXX" placeholderTextColor={colors.textSecondary} maxLength={6} value={opponentAccessCode} onChangeText={setOpponentAccessCode} autoCapitalize="characters" />
-                        <Text style={styles.dividerText}>or unregistered guest</Text>
+                        <TextInput
+                            style={[styles.input, { textTransform: 'uppercase', textAlign: 'center', letterSpacing: 4, fontSize: 20 }]}
+                            placeholder="XXXXXX"
+                            placeholderTextColor={colors.textSecondary}
+                            maxLength={6}
+                            value={opponentAccessCode}
+                            onChangeText={(value) => {
+                                setOpponentAccessCode(value);
+                                if (value.trim()) {
+                                    setSelectedOpponentTeamId(null);
+                                }
+                            }}
+                            autoCapitalize="characters"
+                        />
                         <Text style={styles.inputLabel}>GUEST TEAM NAME</Text>
-                        <TextInput style={styles.input} placeholder="e.g. Rival University" placeholderTextColor={colors.textSecondary} value={opponentName} onChangeText={setOpponentName} />
+                        <TextInput
+                            style={styles.input}
+                            placeholder="e.g. Rival University"
+                            placeholderTextColor={colors.textSecondary}
+                            value={opponentName}
+                            onChangeText={(value) => {
+                                setOpponentName(value);
+                                if (!selectedOpponentTeam || value !== selectedOpponentTeam.name) {
+                                    setSelectedOpponentTeamId(null);
+                                }
+                            }}
+                        />
+
+                        <Text style={styles.inputLabel}>GAME LOCATION (OPTIONAL)</Text>
+                        <TextInput
+                            style={styles.input}
+                            placeholder="e.g. Main Turf Field"
+                            placeholderTextColor={colors.textSecondary}
+                            value={gameLocationSetup}
+                            onChangeText={setGameLocationSetup}
+                        />
                         <View style={styles.setupDivider} />
                         
                         <Text style={styles.inputLabel}>LIVESTREAM URL (OPTIONAL)</Text>
@@ -829,6 +1054,9 @@ export default function RecorderScreen() {
                             <View style={styles.coachIntelHeader}>
                                 <Ionicons name="sparkles" size={18} color={colors.primary} />
                                 <Text style={styles.coachIntelTitle}>Line Recommendation Assistant</Text>
+                                <TouchableOpacity onPress={() => setShowLineIntelHelp(true)} activeOpacity={0.7} style={{ marginRight: 6 }}>
+                                    <Ionicons name="help-circle-outline" size={16} color={colors.textSecondary} />
+                                </TouchableOpacity>
                                 <Text style={styles.coachIntelConfidence}>
                                     {isPrepIntelLoading ? '...' : `${preGameIntel?.confidence ?? 20}%`}
                                 </Text>
@@ -916,24 +1144,67 @@ export default function RecorderScreen() {
                             </Text>
                         </View>
 
+                        {!!gameState.gameLocation && (
+                            <View style={styles.locationPill}>
+                                <Ionicons name="location-outline" size={15} color={colors.textSecondary} />
+                                <Text style={styles.locationPillText}>{gameState.gameLocation}</Text>
+                            </View>
+                        )}
+
+                        <View style={styles.streamEditorCard}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                                <Ionicons name="logo-youtube" size={18} color={colors.error} />
+                                <Text style={[styles.sectionTitle, { marginLeft: 8, marginBottom: 0 }]}>Livestream Link</Text>
+                            </View>
+                            <TextInput
+                                style={styles.input}
+                                placeholder="Paste YouTube livestream URL"
+                                placeholderTextColor={colors.textSecondary}
+                                value={inGameStreamUrl}
+                                onChangeText={setInGameStreamUrl}
+                                autoCapitalize="none"
+                                keyboardType="url"
+                            />
+                            <View style={{ flexDirection: 'row', gap: 10 }}>
+                                <TouchableOpacity
+                                    style={[styles.controlBtn, { flex: 1, backgroundColor: colors.primary, borderColor: colors.primary }]}
+                                    onPress={handleSaveInGameStream}
+                                    disabled={isSavingLiveStream}
+                                    activeOpacity={0.75}
+                                >
+                                    <Text style={[styles.controlBtnText, { color: colors.onPrimary }]}>
+                                        {isSavingLiveStream ? 'Saving...' : 'Save Link'}
+                                    </Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[styles.controlBtn, { flex: 1 }]}
+                                    onPress={() => setInGameStreamUrl('')}
+                                    activeOpacity={0.75}
+                                >
+                                    <Text style={styles.controlBtnText}>Clear</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+
                         {/* ACTIVE LINEUP GRID */}
                         <View style={styles.lineupSection}>
                             <Text style={styles.sectionTitle}>ACTIVE LINEUP (7)</Text>
-                            
-                            {gameState.advancedTracking && gameState.possession === ourTeam?.id && !discHolderId && !isLocked && (
-                                <Text style={[styles.sectionSubtitle, { color: colors.primary, fontWeight: '700' }]}>● Select the player who picked up the disc.</Text>
-                            )}
-                            {gameState.advancedTracking && gameState.fieldMapEnabled && gameState.possession === ourTeam?.id && pendingPassTargetId && !isLocked && (
-                                <Text style={[styles.sectionSubtitle, { color: colors.warning, fontWeight: '700' }]}>
-                                    ● Pass target selected: tap {ourTeam?.players?.[pendingPassTargetId]?.name?.split(' ')[0] || 'receiver'} location on the map to confirm.
-                                </Text>
-                            )}
-                            {gameState.advancedTracking && gameState.possession === ourTeam?.id && discHolderId && !isLocked && (
-                                <Text style={[styles.sectionSubtitle, { color: colors.success, fontWeight: '700' }]}>● Tracking Time. Select their target to log a Pass.</Text>
-                            )}
-                            {(!gameState.advancedTracking || gameState.possession !== ourTeam?.id || isLocked) && (
-                                <Text style={styles.sectionSubtitle}>Tap to select operator. Long press to substitute.</Text>
-                            )}
+                            <View style={styles.lineupStatusRow}>
+                                {gameState.advancedTracking && gameState.possession === ourTeam?.id && !isLocked ? (
+                                    !discHolderId ? (
+                                        <Text numberOfLines={1} style={[styles.sectionSubtitle, { color: colors.primary, fontWeight: '700' }]}>● Select the player who picked up the disc.</Text>
+                                    ) : (
+                                        <Text
+                                            numberOfLines={1}
+                                            style={[styles.sectionSubtitle, { color: pendingPassTargetId && gameState.fieldMapEnabled ? colors.warning : colors.success, fontWeight: '700' }]}
+                                        >
+                                            ● Tracking Time. Select their target to log a Pass{pendingPassTargetId && gameState.fieldMapEnabled ? ` • Target selected: tap ${ourTeam?.players?.[pendingPassTargetId]?.name?.split(' ')[0] || 'receiver'} on map.` : '.'}
+                                        </Text>
+                                    )
+                                ) : (
+                                    <Text numberOfLines={1} style={styles.sectionSubtitle}>Tap to select operator. Long press to substitute.</Text>
+                                )}
+                            </View>
                             
                             <View style={styles.playerGrid}>
                                 {ourTeam?.players && Object.values(ourTeam.players)
@@ -1116,6 +1387,30 @@ export default function RecorderScreen() {
                 )}
             </ScrollView>
 
+            <Modal visible={showMapGuideModal} animationType="fade" transparent>
+                <View style={styles.modalOverlay}>
+                    <View style={[styles.sotgCard, { maxWidth: 460 }]}> 
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+                            <Ionicons name="map-outline" size={24} color={colors.primary} />
+                            <Text style={[styles.sotgTitle, { marginBottom: 0, marginLeft: 10, textAlign: 'left', flex: 1 }]}>Field Map Quick Guide</Text>
+                        </View>
+                        <Text style={styles.coachIntelSubtext}>1. Tap a player who has the disc.</Text>
+                        <Text style={styles.coachIntelSubtext}>2. Tap that player location on the field map.</Text>
+                        <Text style={styles.coachIntelSubtext}>3. For passes: tap receiver, then tap receiver location on the map.</Text>
+                        <Text style={styles.coachIntelSubtext}>4. Tap event buttons like Goal, Throwaway, Drop, or D-Block.</Text>
+                        <Text style={[styles.coachIntelSubtext, { marginBottom: 18 }]}>Tip: The yellow marker shows the next event location that will be logged.</Text>
+
+                        <TouchableOpacity
+                            style={[styles.startMatchBtn, { marginTop: 6 }]}
+                            onPress={() => setShowMapGuideModal(false)}
+                            activeOpacity={0.8}
+                        >
+                            <Text style={styles.startMatchBtnText}>Got It</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
+
             {/* SOTG MODAL */}
             <Modal visible={showSotgModal} animationType="slide" transparent={true}>
                 <View style={styles.modalOverlay}>
@@ -1208,6 +1503,29 @@ export default function RecorderScreen() {
                 </View>
             </Modal>
 
+            <BrandedDialog
+                visible={showLineIntelHelp}
+                title="Line Recommendation Assistant"
+                message="Suggestions are built from recent tracked games using scoring impact, defensive plays, passing reliability, and repeat player-pair chemistry. Confidence increases with more tracked events."
+                colors={colors}
+                icon="sparkles-outline"
+                onPrimary={() => setShowLineIntelHelp(false)}
+            />
+
+            <BrandedDialog
+                visible={showEndGameConfirm}
+                title={endGameConfirmCopy.title}
+                message={endGameConfirmCopy.message}
+                colors={colors}
+                icon="flag-outline"
+                accentColor={colors.error}
+                primaryLabel="End Match"
+                secondaryLabel="Cancel"
+                dismissOnBackdrop={false}
+                onPrimary={proceedWithEndGame}
+                onSecondary={() => setShowEndGameConfirm(false)}
+            />
+
 
         </KeyboardAvoidingView>
     );
@@ -1232,11 +1550,24 @@ const getStyles = (colors: ThemeColors) => {
     
     sectionTitle: { ...getTypography(colors).label, marginBottom: 8 },
     sectionSubtitle: { ...getTypography(colors).bodySmall, marginBottom: 16, marginTop: -4 },
+    lineupStatusRow: { minHeight: 24, justifyContent: 'center' },
     
     // Setup View
     setupCard: { backgroundColor: colors.surface, padding: 24, borderRadius: Layout.radiusLg, borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
     setupHeaderBox: { alignItems: 'center', marginBottom: 24 },
     setupTitle: { ...getTypography(colors).title, fontSize: 20, marginTop: 8 },
+    scheduledPrefillBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        padding: 10,
+        borderRadius: Layout.radiusMd,
+        borderWidth: 1,
+        borderColor: colors.primary,
+        backgroundColor: colors.primaryLight,
+        marginBottom: 12,
+    },
+    scheduledPrefillText: { ...getTypography(colors).bodySmall, color: colors.primary, fontWeight: '600' },
     coachIntelCard: {
         backgroundColor: colors.surfaceSecondary,
         padding: 14,
@@ -1259,6 +1590,42 @@ const getStyles = (colors: ThemeColors) => {
     coachIntelBullet: { ...getTypography(colors).bodySmall, color: colors.text, marginBottom: 4 },
     inputLabel: { ...getTypography(colors).label, marginBottom: 8 },
     input: { ...getTypography(colors).body, backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border, padding: 16, borderRadius: Layout.radiusMd, color: colors.text, marginBottom: 16 },
+    selectedOpponentChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        backgroundColor: colors.primaryLight,
+        borderWidth: 1,
+        borderColor: colors.primary,
+        borderRadius: Layout.radiusMd,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        marginBottom: 10,
+    },
+    selectedOpponentText: { ...Typography.body, color: colors.primary, fontWeight: '600' },
+    opponentResultRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        backgroundColor: colors.surfaceSecondary,
+        borderWidth: 1,
+        borderColor: colors.border,
+        borderRadius: Layout.radiusSm,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        marginBottom: 8,
+    },
+    opponentResultText: { ...Typography.body, color: colors.text, fontSize: 14 },
+    opponentEmptyRow: {
+        backgroundColor: colors.surfaceSecondary,
+        borderWidth: 1,
+        borderColor: colors.border,
+        borderRadius: Layout.radiusSm,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        marginBottom: 8,
+    },
+    opponentEmptyText: { ...Typography.bodySmall, color: colors.textSecondary },
     dividerText: { ...getTypography(colors).bodySmall, textAlign: 'center', marginVertical: 8 },
     setupDivider: { height: 1, backgroundColor: colors.border, marginVertical: 20 },
     settingsRow: { flexDirection: 'row', marginBottom: 24 },
@@ -1281,6 +1648,30 @@ const getStyles = (colors: ThemeColors) => {
     
     possessionIndicator: { paddingVertical: 12, borderRadius: Layout.radiusMd, marginBottom: 24, alignItems: 'center', borderWidth: 1, borderColor: colors.border },
     possessionIndicatorText: { ...getTypography(colors).body, fontWeight: '700' },
+    locationPill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        alignSelf: 'flex-start',
+        marginTop: -10,
+        marginBottom: 14,
+        gap: 6,
+        backgroundColor: colors.surfaceSecondary,
+        borderWidth: 1,
+        borderColor: colors.border,
+        borderRadius: Layout.radiusLg,
+        paddingVertical: 6,
+        paddingHorizontal: 10,
+    },
+    locationPillText: { ...Typography.bodySmall, color: colors.textSecondary },
+    streamEditorCard: {
+        backgroundColor: colors.surface,
+        padding: 14,
+        borderRadius: Layout.radiusMd,
+        marginBottom: 14,
+        borderWidth: 1,
+        borderColor: colors.border,
+        ...Layout.shadow,
+    },
 
     // Field Map Button
     fieldMapBtn: { 

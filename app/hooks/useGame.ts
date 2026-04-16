@@ -2,8 +2,8 @@ import { onValue, push, ref, set, update } from 'firebase/database';
 import { useCallback, useEffect, useState } from 'react';
 import { db } from '../../firebaseConfig';
 import { GameLogic } from '../services/GameLogic';
-import { TeamService } from '../services/TeamService';
 import { InteractionService } from '../services/InteractionService';
+import { TeamService } from '../services/TeamService';
 import { EventType, GameEvent, GameState, INITIAL_GAME_STATE } from '../services/types';
 
 export const useGame = (gameId?: string) => {
@@ -96,6 +96,7 @@ export const useGame = (gameId?: string) => {
         team1Id: string,
         team2Id: string,
         team2Name: string,
+        gameLocation: string,
         gameTarget: number,
         initialPossession: string,
         advancedTracking: boolean = false,
@@ -118,6 +119,7 @@ export const useGame = (gameId?: string) => {
             team1Id,
             team2Id,
             team2Name,
+            gameLocation,
             possession: initialPossession,
             firstHalfPossession: initialPossession,
             gameTarget,
@@ -160,6 +162,12 @@ export const useGame = (gameId?: string) => {
         }
     };
 
+    const updateStreamUrl = async (streamUrl: string) => {
+        if (!gameState.gameId) return;
+        const gameRef = ref(db, `games/${gameState.gameId}`);
+        await update(gameRef, { streamUrl: streamUrl.trim() });
+    };
+
     // Hand-off recording to another user
     const handOffRecording = async (newRecorderId: string) => {
         if (!gameState.gameId) return;
@@ -174,6 +182,7 @@ export const useGame = (gameId?: string) => {
         canUndo: undoStack.length > 0,
         startGame,
         endGame,
+        updateStreamUrl,
         handOffRecording,
     };
 };

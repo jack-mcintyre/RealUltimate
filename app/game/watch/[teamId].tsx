@@ -1,9 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, Dimensions, Linking, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { auth } from '../../../firebaseConfig';
+import BrandedDialog from '../../../src/components/BrandedDialog';
 import { InteractionService } from '../../services/InteractionService';
 import { LiveFeedService } from '../../services/LiveFeedService';
 import { TeamService } from '../../services/TeamService';
@@ -38,6 +40,22 @@ const getStreamConfig = (url?: string) => {
     
     return { type: 'unknown', originalUrl: url };
 };
+
+const MetricHelp = ({
+    title,
+    explanation,
+    color,
+    onShow,
+}: {
+    title: string;
+    explanation: string;
+    color: string;
+    onShow: (title: string, explanation: string) => void;
+}) => (
+    <TouchableOpacity onPress={() => onShow(title, explanation)} activeOpacity={0.7} style={{ marginLeft: 6, marginTop: -2, alignSelf: 'center' }}>
+        <Ionicons name="help-circle-outline" size={15} color={color} />
+    </TouchableOpacity>
+);
 
 // --- Floating Emoji Component ---
 const FloatingEmoji = ({ emoji, index }: { emoji: string; index: number }) => {
@@ -75,6 +93,99 @@ const FloatingEmoji = ({ emoji, index }: { emoji: string; index: number }) => {
     );
 };
 
+const FlyingDisc = ({
+    lane,
+    direction,
+    tint,
+    size,
+    travelMs,
+    spinTurns,
+    arcLift,
+    onDone,
+}: {
+    lane: number;
+    direction: 'ltr' | 'rtl';
+    tint: string;
+    size: number;
+    travelMs: number;
+    spinTurns: number;
+    arcLift: number;
+    onDone: () => void;
+}) => {
+    const screenWidth = Dimensions.get('window').width;
+    const startX = direction === 'ltr' ? -120 : screenWidth + 120;
+    const endX = direction === 'ltr' ? screenWidth + 120 : -120;
+    const translateX = useRef(new Animated.Value(startX)).current;
+    const translateY = useRef(new Animated.Value(lane)).current;
+    const rotate = useRef(new Animated.Value(0)).current;
+    const opacity = useRef(new Animated.Value(1)).current;
+    const scale = useRef(new Animated.Value(0.8)).current;
+
+    useEffect(() => {
+        Animated.parallel([
+            Animated.timing(translateX, {
+                toValue: endX,
+                duration: travelMs,
+                useNativeDriver: true,
+            }),
+            Animated.sequence([
+                Animated.timing(translateY, {
+                    toValue: lane - arcLift,
+                    duration: Math.max(240, Math.round(travelMs * 0.44)),
+                    useNativeDriver: true,
+                }),
+                Animated.timing(translateY, {
+                    toValue: lane + Math.max(14, Math.round(arcLift * 0.33)),
+                    duration: Math.max(260, Math.round(travelMs * 0.56)),
+                    useNativeDriver: true,
+                }),
+            ]),
+            Animated.timing(rotate, { toValue: spinTurns, duration: travelMs, useNativeDriver: true }),
+            Animated.sequence([
+                Animated.delay(Math.max(240, Math.round(travelMs * 0.62))),
+                Animated.timing(opacity, { toValue: 0, duration: Math.max(180, Math.round(travelMs * 0.38)), useNativeDriver: true }),
+            ]),
+            Animated.sequence([
+                Animated.timing(scale, { toValue: 1.24, duration: Math.max(160, Math.round(travelMs * 0.2)), useNativeDriver: true }),
+                Animated.timing(scale, { toValue: 0.98, duration: Math.max(260, Math.round(travelMs * 0.45)), useNativeDriver: true }),
+            ]),
+        ]).start(() => onDone());
+    }, [arcLift, endX, lane, onDone, opacity, rotate, scale, spinTurns, translateX, translateY, travelMs]);
+
+    const spin = rotate.interpolate({ inputRange: [0, spinTurns], outputRange: ['0deg', `${360 * spinTurns}deg`] });
+
+    return (
+        <Animated.View
+            style={{
+                position: 'absolute',
+                left: 0,
+                top: 0,
+                opacity,
+                transform: [
+                    { translateX },
+                    { translateY },
+                    { perspective: 900 },
+                    { rotateX: direction === 'ltr' ? '62deg' : '-62deg' },
+                    { rotateY: direction === 'ltr' ? '20deg' : '-20deg' },
+                    { rotate: spin },
+                    { scale },
+                ],
+            }}
+        >
+            <Ionicons
+                name="disc"
+                size={size}
+                color={tint}
+                style={{
+                    textShadowColor: 'rgba(0,0,0,0.45)',
+                    textShadowOffset: { width: 0, height: 4 },
+                    textShadowRadius: 8,
+                }}
+            />
+        </Animated.View>
+    );
+};
+
 // --- Momentum Bar Component ---
 const MomentumBar = ({ history, team1Id, colors }: { history: any[]; team1Id: string; colors: ThemeColors }) => {
 // Removed MomentumBar as requested
@@ -91,6 +202,154 @@ const getOnFirePlayers = (history: any[]): string[] => {
         }
     });
     return Object.entries(playerCounts).filter(([_, count]) => count >= 3).map(([id]) => id);
+};
+
+const formatEndzoneLabel = (name: string) => {
+    const trimmed = (name || '').trim().toUpperCase();
+    if (!trimmed) return '';
+    const words = trimmed.split(/\s+/).filter(Boolean);
+    if (words.length === 1) {
+        const word = words[0];
+        if (word.length <= 10) return word;
+        const cut = Math.ceil(word.length / 2);
+        return `${word.slice(0, cut)}\n${word.slice(cut)}`;
+    }
+    const midpoint = Math.ceil(words.length / 2);
+    return `${words.slice(0, midpoint).join(' ')}\n${words.slice(midpoint).join(' ')}`;
+};
+
+const isDirectionalEvent = (event: any) => {
+    const { throwerId, receiverId } = getEventActors(event);
+    if (!throwerId || !receiverId) return false;
+    return ['Pass', 'Drop', 'Throwaway', 'T', 'Goal', 'G'].includes(event?.type);
+};
+
+const trajectoryColor = (event: any, colors: ThemeColors) => {
+    switch (event?.type) {
+        case 'Goal':
+        case 'G':
+            return '#facc15';
+        case 'Drop':
+            return '#f97316';
+        case 'Throwaway':
+        case 'T':
+            return colors.error;
+        default:
+            return '#60a5fa';
+    }
+};
+
+const LiveFieldTracker = ({
+    events,
+    colors,
+    ourTeamName,
+    oppTeamName,
+}: {
+    events: any[];
+    colors: ThemeColors;
+    ourTeamName: string;
+    oppTeamName: string;
+}) => {
+    const [dim, setDim] = useState({ w: 0, h: 0 });
+    const trackedEvents = (events || [])
+        .filter((event) => isValidCoord(event.fieldPosition) || isValidCoord(event.fromFieldPosition))
+        .slice(-18);
+
+    if (!trackedEvents.length) return null;
+
+    const renderVector = (event: any, idx: number) => {
+        if (dim.w <= 0 || dim.h <= 0 || !isDirectionalEvent(event)) return null;
+        if (!isValidCoord(event.fromFieldPosition) || !isValidCoord(event.fieldPosition)) return null;
+
+        const x1 = (event.fromFieldPosition.x / 100) * dim.w;
+        const y1 = (event.fromFieldPosition.y / 100) * dim.h;
+        const x2 = (event.fieldPosition.x / 100) * dim.w;
+        const y2 = (event.fieldPosition.y / 100) * dim.h;
+        const length = Math.sqrt(((x2 - x1) ** 2) + ((y2 - y1) ** 2));
+        if (length < 2) return null;
+
+        const angle = Math.atan2(y2 - y1, x2 - x1) * (180 / Math.PI);
+        const cX = (x1 + x2) / 2;
+        const cY = (y1 + y2) / 2;
+        const alpha = Math.max(0.2, (idx + 1) / trackedEvents.length);
+
+        return (
+            <View
+                key={`vector-${idx}`}
+                style={{
+                    position: 'absolute',
+                    left: cX - (length / 2),
+                    top: cY - 1,
+                    width: length,
+                    height: 2.2,
+                    borderRadius: 2,
+                    backgroundColor: trajectoryColor(event, colors),
+                    opacity: alpha,
+                    transform: [{ rotate: `${angle}deg` }],
+                    zIndex: 3,
+                }}
+            />
+        );
+    };
+
+    return (
+        <View style={stylesForMap(colors).card}>
+            <View style={stylesForMap(colors).header}>
+                <Text style={stylesForMap(colors).title}>LIVE FIELD TRACKER</Text>
+                <Text style={stylesForMap(colors).subTitle}>Showing last {trackedEvents.length} mapped events</Text>
+            </View>
+
+            <View
+                onLayout={(e) => setDim({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
+                style={stylesForMap(colors).field}
+            >
+                <View style={stylesForMap(colors).lineLeftEndzone} />
+                <View style={stylesForMap(colors).lineRightEndzone} />
+                <View style={stylesForMap(colors).lineMidfield} />
+                <View style={stylesForMap(colors).lineTopSideline} />
+                <View style={stylesForMap(colors).lineBottomSideline} />
+
+                <View style={stylesForMap(colors).leftLabelWrap}>
+                    <View style={stylesForMap(colors).leftLabelRot}>
+                        <Text style={stylesForMap(colors).endzoneText} numberOfLines={2}>{formatEndzoneLabel(oppTeamName)}</Text>
+                    </View>
+                </View>
+                <View style={stylesForMap(colors).rightLabelWrap}>
+                    <View style={stylesForMap(colors).rightLabelRot}>
+                        <Text style={stylesForMap(colors).endzoneText} numberOfLines={2}>{formatEndzoneLabel(ourTeamName)}</Text>
+                    </View>
+                </View>
+
+                {trackedEvents.map((event, idx) => renderVector(event, idx))}
+
+                {trackedEvents.map((event, idx) => {
+                    const marker = isValidCoord(event.fieldPosition) ? event.fieldPosition : event.fromFieldPosition;
+                    if (!marker) return null;
+                    const isLatest = idx === trackedEvents.length - 1;
+                    return (
+                        <View
+                            key={`marker-${idx}`}
+                            style={{
+                                position: 'absolute',
+                                left: `${marker.x}%`,
+                                top: `${marker.y}%`,
+                                width: isLatest ? 16 : 11,
+                                height: isLatest ? 16 : 11,
+                                borderRadius: isLatest ? 8 : 5.5,
+                                marginLeft: isLatest ? -8 : -5.5,
+                                marginTop: isLatest ? -8 : -5.5,
+                                backgroundColor: isLatest ? '#f8fafc' : 'rgba(255,255,255,0.75)',
+                                borderWidth: isLatest ? 2 : 1,
+                                borderColor: isLatest ? trajectoryColor(event, colors) : 'rgba(15,23,42,0.3)',
+                                opacity: isLatest ? 1 : Math.max(0.35, (idx + 1) / trackedEvents.length),
+                                zIndex: 4,
+                            }}
+                        />
+                    );
+                })}
+            </View>
+        </View>
+    );
 };
 
 const isValidCoord = (coord: any) => typeof coord?.x === 'number' && typeof coord?.y === 'number' && coord.x >= 0 && coord.y >= 0;
@@ -146,16 +405,62 @@ export default function LiveFeedScreen() {
     const { teamId } = useLocalSearchParams<{ teamId: string }>();
     const [team, setTeam] = useState<Team | null>(null);
     const [activeGame, setActiveGame] = useState<GameState | null>(null);
-    const [floatingEmojis, setFloatingEmojis] = useState<{ id: number; emoji: string }[]>([]);
+    const [floatingEmojis, setFloatingEmojis] = useState<{ id: string; emoji: string; createdAt: number }[]>([]);
+    const [flyingDiscs, setFlyingDiscs] = useState<{
+        id: string;
+        lane: number;
+        direction: 'ltr' | 'rtl';
+        tint: string;
+        size: number;
+        travelMs: number;
+        spinTurns: number;
+        arcLift: number;
+    }[]>([]);
     const [showYTChat, setShowYTChat] = useState(false);
+    const [scoreCelebration, setScoreCelebration] = useState<{ side: 'US' | 'THEM'; title: string; subtitle: string; accent: string; icon: string } | null>(null);
     const emojiCounter = useRef(0);
+    const discCounter = useRef(0);
     const lastEmojiSentRef = useRef(0);
+    const seenReactionIdsRef = useRef<Set<string>>(new Set());
+    const celebrationScale = useRef(new Animated.Value(0.7)).current;
+    const celebrationOpacity = useRef(new Animated.Value(0)).current;
+    const celebrationBurst = useRef(new Animated.Value(0)).current;
+    const celebrationTranslateY = useRef(new Animated.Value(-120)).current;
+    const celebrationTilt = useRef(new Animated.Value(0)).current;
+    const celebrationOrbit = useRef(new Animated.Value(0)).current;
+    const lastScoringEventKeyRef = useRef<string | null>(null);
 
     // Prediction state
     const [userVote, setUserVote] = useState<string | null>(null);
     const [fanChallengePick, setFanChallengePick] = useState<'US_GOAL' | 'THEM_GOAL' | 'TURNOVER' | null>(null);
     const [fanChallengeScore, setFanChallengeScore] = useState({ correct: 0, total: 0, lastResult: '' });
+    const [infoDialog, setInfoDialog] = useState<{ title: string; message: string; icon?: keyof typeof Ionicons.glyphMap } | null>(null);
     const challengeAnchorRef = useRef<string | null>(null);
+
+    const openMetricHelp = (title: string, explanation: string) => {
+        setInfoDialog({ title, message: explanation, icon: 'help-circle-outline' });
+    };
+
+    const launchFlyingDiscs = useCallback((count: number, tint: string) => {
+        const palette = [tint, '#facc15', '#f8fafc', '#38bdf8'];
+        setFlyingDiscs((prev) => {
+            const next = [...prev];
+            for (let i = 0; i < count; i++) {
+                discCounter.current += 1;
+                next.push({
+                    id: `disc-${Date.now()}-${discCounter.current}`,
+                    lane: 70 + Math.random() * 300,
+                    direction: Math.random() > 0.5 ? 'ltr' : 'rtl',
+                    tint: palette[i % palette.length],
+                    size: 30 + Math.round(Math.random() * 24),
+                    travelMs: 900 + Math.round(Math.random() * 1500),
+                    spinTurns: 3 + Math.round(Math.random() * 4),
+                    arcLift: 36 + Math.round(Math.random() * 68),
+                });
+            }
+            return next.slice(-30);
+        });
+    }, []);
 
     useEffect(() => {
         if (!teamId) return;
@@ -172,16 +477,27 @@ export default function LiveFeedScreen() {
                 // Subscribe to reactions
                 if (unsubReactions) unsubReactions();
                 unsubReactions = InteractionService.subscribeToReactions(t.activeGameId, (reactions) => {
-                    const newEmojis = reactions.map(r => ({ id: r.timestamp + Math.random(), emoji: r.emoji }));
-                    setFloatingEmojis(prev => {
-                        const combined = [...prev, ...newEmojis.filter(ne => !prev.some(pe => Math.abs(pe.id - ne.id) < 100))];
-                        return combined.slice(-20); // Keep max 20 floating
+                    const unseen = reactions.filter((reaction) => !seenReactionIdsRef.current.has(reaction.id));
+                    if (!unseen.length) return;
+
+                    unseen.forEach((reaction) => seenReactionIdsRef.current.add(reaction.id));
+                    setFloatingEmojis((prev) => {
+                        const next = [
+                            ...prev,
+                            ...unseen.map((reaction) => ({
+                                id: reaction.id,
+                                emoji: reaction.emoji,
+                                createdAt: reaction.timestamp,
+                            })),
+                        ];
+                        return next.slice(-30);
                     });
                 });
             } else {
                 setActiveGame(null);
                 if (unsubGame) unsubGame();
                 if (unsubReactions) unsubReactions();
+                seenReactionIdsRef.current.clear();
             }
         });
 
@@ -195,7 +511,8 @@ export default function LiveFeedScreen() {
     // Auto-clean old floating emojis
     useEffect(() => {
         const interval = setInterval(() => {
-            setFloatingEmojis(prev => prev.filter(e => Date.now() - e.id < 4000));
+            const cutoff = Date.now() - 4200;
+            setFloatingEmojis((prev) => prev.filter((e) => e.createdAt > cutoff));
         }, 2000);
         return () => clearInterval(interval);
     }, []);
@@ -203,16 +520,22 @@ export default function LiveFeedScreen() {
     const handleEmojiPress = useCallback((emoji: string) => {
         const userId = auth.currentUser?.uid || 'anon';
         const now = Date.now();
+        if (emoji === '🥏') {
+            launchFlyingDiscs(4, colors.primary);
+        }
         // Add locally immediately for instant feedback
         emojiCounter.current++;
-        setFloatingEmojis(prev => [...prev, { id: now + emojiCounter.current, emoji }].slice(-15));
+        setFloatingEmojis((prev) => [
+            ...prev,
+            { id: `local-${now}-${emojiCounter.current}`, emoji, createdAt: now }
+        ].slice(-20));
         
         // Debounce Firebase to prevent lag from spamming
         if (activeGame?.gameId && now - lastEmojiSentRef.current > 300) {
             InteractionService.sendReaction(activeGame.gameId, emoji, userId);
             lastEmojiSentRef.current = now;
         }
-    }, [activeGame?.gameId]);
+    }, [activeGame?.gameId, colors.primary, launchFlyingDiscs]);
 
     const handleVote = useCallback(async (votedTeamId: string) => {
         const userId = auth.currentUser?.uid;
@@ -257,6 +580,85 @@ export default function LiveFeedScreen() {
         setFanChallengePick(null);
         challengeAnchorRef.current = latestKey;
     }, [activeGame?.history, fanChallengePick]);
+
+    useEffect(() => {
+        if (!activeGame?.history?.length) return;
+
+        const latestScore = [...activeGame.history].reverse().find((event) => (
+            event.type === 'G' ||
+            event.type === 'Goal' ||
+            event.type === 'Callahan_US' ||
+            event.type === 'Opponent Score' ||
+            event.type === 'Callahan_THEM' ||
+            event.type === 'D' ||
+            event.type === 'D-Block'
+        ));
+        if (!latestScore) return;
+
+        const scoreKey = eventStableKey(latestScore);
+        if (lastScoringEventKeyRef.current === scoreKey) return;
+        lastScoringEventKeyRef.current = scoreKey;
+
+        const isUsScore = latestScore.type === 'G' || latestScore.type === 'Goal' || latestScore.type === 'Callahan_US';
+        const isThemScore = latestScore.type === 'Opponent Score' || latestScore.type === 'Callahan_THEM';
+        const isBlock = latestScore.type === 'D' || latestScore.type === 'D-Block';
+
+        const side: 'US' | 'THEM' = isThemScore ? 'THEM' : 'US';
+        const accent = isBlock ? colors.primary : (side === 'US' ? colors.success : colors.error);
+        const title = isBlock
+            ? 'BLOCK!'
+            : (latestScore.type === 'Callahan_US' || latestScore.type === 'Callahan_THEM')
+                ? 'CALLAHAN!'
+                : 'GOAL!';
+        const subtitle = isBlock
+            ? `${team?.name || 'Defense'} earned the turn`
+            : side === 'US'
+                ? `${team?.name || 'Us'} just scored`
+                : `${activeGame?.team2Name || 'Opponent'} answered`;
+        const icon = isBlock ? 'shield-checkmark' : (title === 'CALLAHAN!' ? 'flash' : 'disc');
+
+        setScoreCelebration({ side, title, subtitle, accent, icon });
+        launchFlyingDiscs(isBlock ? 6 : 10, accent);
+
+        if (Platform.OS !== 'web') {
+            if (isBlock) {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+            } else {
+                Haptics.notificationAsync(isUsScore ? Haptics.NotificationFeedbackType.Success : Haptics.NotificationFeedbackType.Warning).catch(() => {});
+            }
+        }
+
+        celebrationScale.setValue(0.65);
+        celebrationOpacity.setValue(0);
+        celebrationBurst.setValue(0);
+        celebrationTranslateY.setValue(-24);
+        celebrationTilt.setValue(0);
+        celebrationOrbit.setValue(0);
+        Animated.sequence([
+            Animated.parallel([
+                Animated.timing(celebrationOpacity, { toValue: 1, duration: 120, useNativeDriver: true }),
+                Animated.spring(celebrationScale, { toValue: 1.08, friction: 6, tension: 120, useNativeDriver: true }),
+                Animated.spring(celebrationTranslateY, { toValue: 0, friction: 8, tension: 120, useNativeDriver: true }),
+                Animated.timing(celebrationBurst, { toValue: 1, duration: 520, useNativeDriver: true }),
+                Animated.timing(celebrationOrbit, { toValue: 1, duration: 520, useNativeDriver: true }),
+            ]),
+            Animated.sequence([
+                Animated.timing(celebrationTilt, { toValue: 0.34, duration: 110, useNativeDriver: true }),
+                Animated.timing(celebrationTilt, { toValue: 0.72, duration: 120, useNativeDriver: true }),
+                Animated.timing(celebrationTilt, { toValue: 1, duration: 120, useNativeDriver: true }),
+            ]),
+            Animated.delay(250),
+            Animated.parallel([
+                Animated.timing(celebrationOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+                Animated.timing(celebrationTranslateY, { toValue: -16, duration: 200, useNativeDriver: true }),
+            ]),
+        ]).start(() => setScoreCelebration(null));
+    }, [activeGame?.history, activeGame?.team2Name, celebrationBurst, celebrationOpacity, celebrationOrbit, celebrationScale, celebrationTilt, celebrationTranslateY, colors.error, colors.primary, colors.success, launchFlyingDiscs, team?.name]);
+
+    const celebrationRingScale = celebrationBurst.interpolate({ inputRange: [0, 1], outputRange: [0.5, 1.45] });
+    const celebrationRingOpacity = celebrationBurst.interpolate({ inputRange: [0, 1], outputRange: [0.65, 0] });
+    const celebrationRingRotate = celebrationOrbit.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '380deg'] });
+    const celebrationTiltRotate = celebrationTilt.interpolate({ inputRange: [0, 0.34, 0.72, 1], outputRange: ['-10deg', '8deg', '-6deg', '0deg'] });
 
     const formatEventMessage = (event: any) => {
         const playerName = team?.players?.[event.playerId]?.name || 'Unknown Player';
@@ -387,7 +789,75 @@ export default function LiveFeedScreen() {
                     ))}
                 </View>
 
-                <ScrollView style={styles.mainContent} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 100 }}>
+                <View style={styles.frisbeeOverlay} pointerEvents="none">
+                    {flyingDiscs.map((disc) => (
+                        <FlyingDisc
+                            key={disc.id}
+                            lane={disc.lane}
+                            direction={disc.direction}
+                            tint={disc.tint}
+                            size={disc.size}
+                            travelMs={disc.travelMs}
+                            spinTurns={disc.spinTurns}
+                            arcLift={disc.arcLift}
+                            onDone={() => setFlyingDiscs((prev) => prev.filter((item) => item.id !== disc.id))}
+                        />
+                    ))}
+                </View>
+
+                {scoreCelebration && (
+                    <Animated.View
+                        pointerEvents="none"
+                        style={[
+                            styles.scoreCelebrationOverlay,
+                            {
+                                opacity: celebrationOpacity,
+                                transform: [{ translateY: celebrationTranslateY }, { scale: celebrationScale }, { rotate: celebrationTiltRotate }],
+                            },
+                        ]}
+                    >
+                        <Animated.View
+                            style={[
+                                styles.scoreCelebrationRing,
+                                {
+                                    borderColor: scoreCelebration.accent,
+                                    opacity: celebrationRingOpacity,
+                                    transform: [{ scale: celebrationRingScale }, { rotate: celebrationRingRotate }],
+                                },
+                            ]}
+                        />
+                        <View style={[
+                            styles.scoreCelebrationCard,
+                            {
+                                borderColor: scoreCelebration.accent,
+                                backgroundColor: colors.surface,
+                                shadowColor: scoreCelebration.accent,
+                            }
+                        ]}>
+                            <View style={[styles.scoreCelebrationIconWrap, { borderColor: scoreCelebration.accent }]}>
+                                <Ionicons name={scoreCelebration.icon as any} size={17} color={scoreCelebration.accent} />
+                            </View>
+                            <Text style={styles.scoreCelebrationTitle}>{scoreCelebration.title}</Text>
+                            <Text style={[
+                                styles.scoreCelebrationTeam,
+                                { color: scoreCelebration.accent }
+                            ]}>
+                                {scoreCelebration.subtitle}
+                            </Text>
+                        </View>
+                    </Animated.View>
+                )}
+
+                <BrandedDialog
+                    visible={!!infoDialog}
+                    title={infoDialog?.title || ''}
+                    message={infoDialog?.message || ''}
+                    colors={colors}
+                    icon={infoDialog?.icon}
+                    onPrimary={() => setInfoDialog(null)}
+                />
+
+                <ScrollView style={styles.mainContent} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 190 }}>
                     
                     {/* LIVE STREAM INTEGRATION */}
                     {activeGame && streamConfig && streamConfig.type !== 'unknown' && (
@@ -484,31 +954,76 @@ export default function LiveFeedScreen() {
                                 </Text>
                             </View>
 
+                            <LiveFieldTracker
+                                events={activeGame.history || []}
+                                colors={colors}
+                                ourTeamName={team.name}
+                                oppTeamName={activeGame.team2Name || 'Opponent'}
+                            />
+
                             {/* LIVE INTELLIGENCE LAYER */}
                             <View style={styles.intelCard}>
                                 <View style={styles.intelHeader}>
                                     <View style={styles.intelBadge}><Text style={styles.intelBadgeText}>AI</Text></View>
                                     <Text style={styles.intelTitle}>Live Intelligence Layer</Text>
+                                    <MetricHelp
+                                        title="Live Intelligence Layer"
+                                        explanation="This card summarizes momentum, pressure, possession value shift (EPV pulse), and current field territory context from tracked events."
+                                        color={colors.textSecondary}
+                                        onShow={openMetricHelp}
+                                    />
                                 </View>
 
                                 <View style={styles.intelGrid}>
                                     <View style={styles.intelPill}>
-                                        <Text style={styles.intelLabel}>Momentum</Text>
+                                        <View style={styles.metricLabelRow}>
+                                            <Text style={styles.intelLabel}>Momentum</Text>
+                                            <MetricHelp
+                                                title="Momentum"
+                                                explanation="Momentum detects active scoring runs by checking who has scored most recently in sequence."
+                                                color={colors.textSecondary}
+                                                onShow={openMetricHelp}
+                                            />
+                                        </View>
                                         <Text style={styles.intelValue} numberOfLines={2}>{momentumText}</Text>
                                     </View>
                                     <View style={styles.intelPill}>
-                                        <Text style={styles.intelLabel}>Pressure Index</Text>
+                                        <View style={styles.metricLabelRow}>
+                                            <Text style={styles.intelLabel}>Pressure Index</Text>
+                                            <MetricHelp
+                                                title="Pressure Index"
+                                                explanation="Pressure Index increases in close-score late-game moments and when recent turnover volume spikes."
+                                                color={colors.textSecondary}
+                                                onShow={openMetricHelp}
+                                            />
+                                        </View>
                                         <Text style={styles.intelValue}>{pressureIndex}</Text>
                                     </View>
                                 </View>
 
                                 <View style={styles.intelGrid}>
                                     <View style={styles.intelPill}>
-                                        <Text style={styles.intelLabel}>EPV Pulse</Text>
+                                        <View style={styles.metricLabelRow}>
+                                            <Text style={styles.intelLabel}>EPV Pulse</Text>
+                                            <MetricHelp
+                                                title="EPV Pulse"
+                                                explanation="EPV Pulse is the rolling average possession-value change from tracked throws during the live game. Positive values suggest stronger field progression."
+                                                color={colors.textSecondary}
+                                                onShow={openMetricHelp}
+                                            />
+                                        </View>
                                         <Text style={[styles.intelValue, { color: epvPulse >= 0 ? colors.success : colors.error }]}>{epvPulse.toFixed(2)}</Text>
                                     </View>
                                     <View style={styles.intelPill}>
-                                        <Text style={styles.intelLabel}>Territory Alert</Text>
+                                        <View style={styles.metricLabelRow}>
+                                            <Text style={styles.intelLabel}>Territory Alert</Text>
+                                            <MetricHelp
+                                                title="Territory Alert"
+                                                explanation="Territory Alert flags when possession enters attacking red zone, defensive danger zone, or deep pinned positions."
+                                                color={colors.textSecondary}
+                                                onShow={openMetricHelp}
+                                            />
+                                        </View>
                                         <Text style={styles.intelValue} numberOfLines={2}>{territoryAlert}</Text>
                                     </View>
                                 </View>
@@ -538,23 +1053,6 @@ export default function LiveFeedScreen() {
                                     ))}
                                 </View>
                             )}
-
-                            {/* EMOJI REACTION BAR */}
-                            <View style={styles.emojiBar}>
-                                <Text style={{ ...getTypography(colors).label, marginBottom: 10 }}>REACT</Text>
-                                <View style={styles.emojiRow}>
-                                    {EMOJIS.map((emoji, idx) => (
-                                        <TouchableOpacity
-                                            key={idx}
-                                            style={styles.emojiBtn}
-                                            onPress={() => handleEmojiPress(emoji)}
-                                            activeOpacity={0.6}
-                                        >
-                                            <Text style={styles.emojiBtnText}>{emoji}</Text>
-                                        </TouchableOpacity>
-                                    ))}
-                                </View>
-                            </View>
 
                             {/* LIVE PREDICTIONS */}
                             <View style={styles.predictionCard}>
@@ -651,7 +1149,15 @@ export default function LiveFeedScreen() {
                             {/* PLAY BY PLAY FEED */}
                             <View style={styles.feedCard}>
                                 <View style={styles.feedHeaderRow}>
-                                    <Text style={styles.sectionTitle}>PLAY BY PLAY</Text>
+                                    <View style={styles.metricLabelRow}>
+                                        <Text style={styles.sectionTitle}>PLAY BY PLAY</Text>
+                                        <MetricHelp
+                                            title="Play by Play"
+                                            explanation="This feed lists each tracked event in reverse chronological order so spectators can follow possession swings in real time."
+                                            color={colors.textSecondary}
+                                            onShow={openMetricHelp}
+                                        />
+                                    </View>
                                 </View>
                                 
                                 {(!activeGame.history || activeGame.history.length === 0) ? (
@@ -698,6 +1204,24 @@ export default function LiveFeedScreen() {
                         </View>
                     )}
                 </ScrollView>
+
+                {activeGame && (
+                    <View style={styles.emojiDock}>
+                        <Text style={styles.emojiDockLabel}>REACT</Text>
+                        <View style={styles.emojiRow}>
+                            {EMOJIS.map((emoji, idx) => (
+                                <TouchableOpacity
+                                    key={`dock-${idx}`}
+                                    style={styles.emojiBtn}
+                                    onPress={() => handleEmojiPress(emoji)}
+                                    activeOpacity={0.6}
+                                >
+                                    <Text style={styles.emojiBtnText}>{emoji}</Text>
+                                </TouchableOpacity>
+                            ))}
+                        </View>
+                    </View>
+                )}
             </View>
         );
     }
@@ -722,6 +1246,47 @@ const getStyles = (colors: ThemeColors) => {
 
     // Emoji Overlay
     emojiOverlay: { position: 'absolute', top: 60, left: 0, right: 0, bottom: 0, zIndex: 99 },
+    frisbeeOverlay: { position: 'absolute', top: 60, left: 0, right: 0, bottom: 0, zIndex: 120 },
+    scoreCelebrationOverlay: {
+        position: 'absolute',
+        top: 90,
+        left: 0,
+        right: 0,
+        alignItems: 'center',
+        zIndex: 140,
+    },
+    scoreCelebrationRing: {
+        position: 'absolute',
+        width: 260,
+        height: 260,
+        borderRadius: 130,
+        borderWidth: 3,
+    },
+    scoreCelebrationCard: {
+        minWidth: 190,
+        borderWidth: 2,
+        borderRadius: Layout.radiusLg,
+        paddingVertical: 14,
+        paddingHorizontal: 18,
+        alignItems: 'center',
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.24,
+        shadowRadius: 18,
+        elevation: 10,
+        ...Layout.shadow,
+    },
+    scoreCelebrationIconWrap: {
+        width: 30,
+        height: 30,
+        borderRadius: 15,
+        borderWidth: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: colors.surfaceSecondary,
+        marginBottom: 4,
+    },
+    scoreCelebrationTitle: { color: colors.text, fontSize: 22, fontWeight: '800', letterSpacing: 1 },
+    scoreCelebrationTeam: { marginTop: 2, fontSize: 14, fontWeight: '700' },
 
     // Scoreboard - enhanced
     scoreboard: { flexDirection: 'row', backgroundColor: colors.surface, borderRadius: Layout.radiusLg, paddingVertical: 24, paddingHorizontal: 20, marginBottom: 12, alignItems: 'center', borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
@@ -770,16 +1335,21 @@ const getStyles = (colors: ThemeColors) => {
     onFireBadge: { fontSize: 11, color: colors.textSecondary },
 
     // Emoji Reaction Bar
-    emojiBar: { 
-        backgroundColor: colors.surface, 
-        borderRadius: Layout.radiusLg, 
-        padding: 16, 
-        marginBottom: 16, 
-        borderWidth: 1, 
+    emojiDock: {
+        position: 'absolute',
+        left: Layout.padding,
+        right: Layout.padding,
+        bottom: 12,
+        backgroundColor: colors.surface,
+        borderRadius: Layout.radiusLg,
+        paddingHorizontal: 14,
+        paddingVertical: 10,
+        borderWidth: 1,
         borderColor: colors.border,
-        ...Layout.shadow
+        ...Layout.shadow,
     },
-    emojiRow: { flexDirection: 'row', justifyContent: 'space-around' },
+    emojiDockLabel: { ...getTypography(colors).label, marginBottom: 8 },
+    emojiRow: { flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center' },
     emojiBtn: { 
         width: 48, 
         height: 48, 
@@ -854,6 +1424,7 @@ const getStyles = (colors: ThemeColors) => {
     intelLabel: { ...getTypography(colors).bodySmall, fontSize: 11, marginBottom: 2 },
     intelValue: { ...getTypography(colors).body, fontWeight: '700', fontSize: 13 },
     intelSubtext: { ...getTypography(colors).bodySmall, marginTop: 3 },
+    metricLabelRow: { flexDirection: 'row', alignItems: 'center' },
 
     // Fan challenge
     challengeCard: {
@@ -900,3 +1471,45 @@ const getStyles = (colors: ThemeColors) => {
     emptyFeed: { ...getTypography(colors).bodySmall, textAlign: 'center', marginVertical: 24 }
 });
 }
+
+const stylesForMap = (colors: ThemeColors) => StyleSheet.create({
+    card: {
+        backgroundColor: colors.surface,
+        borderRadius: Layout.radiusLg,
+        padding: 14,
+        marginBottom: 16,
+        borderWidth: 1,
+        borderColor: colors.border,
+        ...Layout.shadow,
+    },
+    header: { marginBottom: 8 },
+    title: { ...getTypography(colors).label, marginBottom: 2 },
+    subTitle: { ...getTypography(colors).bodySmall, color: colors.textSecondary },
+    field: {
+        width: '100%',
+        height: 190,
+        backgroundColor: '#15803d',
+        borderRadius: Layout.radiusMd,
+        overflow: 'hidden',
+        borderWidth: 2,
+        borderColor: '#166534',
+        position: 'relative',
+    },
+    lineLeftEndzone: { position: 'absolute', left: '18%', top: 0, bottom: 0, width: 2, backgroundColor: 'rgba(255,255,255,0.5)' },
+    lineRightEndzone: { position: 'absolute', left: '82%', top: 0, bottom: 0, width: 2, backgroundColor: 'rgba(255,255,255,0.5)' },
+    lineMidfield: { position: 'absolute', left: '50%', top: 0, bottom: 0, width: 2, backgroundColor: 'rgba(255,255,255,0.3)' },
+    lineTopSideline: { position: 'absolute', left: 0, right: 0, top: '8%', height: 2, backgroundColor: 'rgba(255,255,255,0.3)' },
+    lineBottomSideline: { position: 'absolute', left: 0, right: 0, bottom: '8%', height: 2, backgroundColor: 'rgba(255,255,255,0.3)' },
+    leftLabelWrap: { position: 'absolute', left: 0, width: '18%', top: 0, bottom: 0, justifyContent: 'center', alignItems: 'center' },
+    rightLabelWrap: { position: 'absolute', right: 0, width: '18%', top: 0, bottom: 0, justifyContent: 'center', alignItems: 'center' },
+    leftLabelRot: { width: 170, transform: [{ rotate: '-90deg' }] },
+    rightLabelRot: { width: 170, transform: [{ rotate: '90deg' }] },
+    endzoneText: {
+        color: 'rgba(255,255,255,0.7)',
+        fontSize: 15,
+        lineHeight: 17,
+        fontWeight: 'bold',
+        letterSpacing: 1.5,
+        textAlign: 'center',
+    },
+});

@@ -163,9 +163,32 @@ export const GameService = {
         }
     },
 
-    deleteGame: async (gameId: string): Promise<void> => {
+    deleteGame: async (gameId: string, requesterId: string): Promise<void> => {
         try {
             const gameRef = ref(db, `games/${gameId}`);
+            const gameSnap = await get(gameRef);
+            if (!gameSnap.exists()) {
+                throw new Error('Game not found');
+            }
+
+            const game = gameSnap.val() as GameState;
+            const teamRef = ref(db, `teams/${game.team1Id}`);
+            const teamSnap = await get(teamRef);
+            if (!teamSnap.exists()) {
+                throw new Error('Team not found');
+            }
+
+            const team = teamSnap.val() as any;
+            const isCoach = team.coachId === requesterId;
+            const isManager = !!team.managers?.[requesterId];
+            if (!isCoach && !isManager) {
+                throw new Error('Permission denied');
+            }
+
+            await set(ref(db, `teams/${game.team1Id}/pastGames/${gameId}`), null);
+            if (game.team2Id) {
+                await set(ref(db, `teams/${game.team2Id}/pastGames/${gameId}`), null);
+            }
             await set(gameRef, null);
         } catch (error) {
             console.error("Error deleting game:", error);
