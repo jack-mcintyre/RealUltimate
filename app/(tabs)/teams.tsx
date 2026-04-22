@@ -5,6 +5,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Image, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { auth } from '../../firebaseConfig';
 import { GameService } from '../services/GameService';
+import { sanitizeAvailability, validateScheduledGameDraft } from '../services/scheduleValidation';
 import { TeamService } from '../services/TeamService';
 import { GameState, ScheduledAvailabilityStatus, ScheduledGame, Team } from '../services/types';
 import { getTypography, Layout } from '../theme/DesignSystem';
@@ -199,8 +200,8 @@ export default function TeamsHubScreen() {
             await TeamService.createTeam(teamNameInput, user.uid, user.email || 'Unknown');
             setTeamNameInput('');
             setTeamMode('none');
-        } catch (e) {
-            alert("Failed to create team.");
+        } catch {
+            Alert.alert('Error', 'Failed to create team.');
         } finally {
             setIsLoading(false);
         }
@@ -215,10 +216,10 @@ export default function TeamsHubScreen() {
                 setAccessCodeInput('');
                 setTeamMode('none');
             } else {
-                alert("Invalid Access Code");
+                Alert.alert('Invalid Access Code', 'Please check the code and try again.');
             }
-        } catch (e) {
-            alert("Failed to join team.");
+        } catch {
+            Alert.alert('Error', 'Failed to join team.');
         } finally {
             setIsLoading(false);
         }
@@ -266,41 +267,29 @@ export default function TeamsHubScreen() {
             return;
         }
 
-        const opponentName = selectedScheduleOpponent?.name || scheduleOpponentName.trim();
-        if (!opponentName) {
-            setScheduleFormError('Select or enter an opponent name.');
+        const validation = validateScheduledGameDraft({
+            opponentName: selectedScheduleOpponent?.name || scheduleOpponentName,
+            location: scheduleLocationInput,
+            scheduleDate,
+            scheduleTime,
+        });
+        if (!validation.ok) {
+            setScheduleFormError(validation.error);
             return;
         }
 
-        let scheduledAt: number | undefined;
-        if (scheduleDate) {
-            const mergedDateTime = new Date(scheduleDate);
-            if (scheduleTime) {
-                mergedDateTime.setHours(scheduleTime.getHours(), scheduleTime.getMinutes(), 0, 0);
-            } else {
-                mergedDateTime.setHours(23, 59, 0, 0);
-            }
-            scheduledAt = mergedDateTime.getTime();
-            if (!Number.isFinite(scheduledAt)) {
-                setScheduleFormError('Please choose a valid date and time.');
-                return;
-            }
-
-            if (scheduledAt <= Date.now()) {
-                setScheduleFormError('Scheduled games must be in the future.');
-                return;
-            }
-        }
+        const validPlayerIds = selectedSchedulePlayers.map((player) => player.id).filter(Boolean);
+        const normalizedAvailability = sanitizeAvailability(scheduleAvailability, validPlayerIds);
 
         try {
             setIsSavingSchedule(true);
             await TeamService.createScheduledGame(selectedTeam.id, {
                 teamName: selectedTeam.name,
-                opponentName,
+                opponentName: validation.opponentName,
                 opponentTeamId: selectedScheduleOpponent?.id || '',
-                location: scheduleLocationInput.trim(),
-                scheduledAt,
-                availability: scheduleAvailability,
+                location: validation.location,
+                scheduledAt: validation.scheduledAt,
+                availability: normalizedAvailability,
                 createdBy: user.uid,
             });
 
@@ -314,7 +303,7 @@ export default function TeamsHubScreen() {
             setScheduleAvailability({});
             setShowDatePicker(false);
             setShowTimePicker(false);
-        } catch (error) {
+        } catch {
             setScheduleFormError('Could not save scheduled game. Please try again.');
         } finally {
             setIsSavingSchedule(false);

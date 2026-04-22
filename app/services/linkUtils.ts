@@ -26,6 +26,46 @@ export const getHostname = (input: string): string => {
     }
 };
 
+const hostMatches = (hostname: string, allowedHost: string): boolean => {
+    return hostname === allowedHost || hostname.endsWith(`.${allowedHost}`);
+};
+
+export const STREAM_HOST_ALLOWLIST = [
+    'youtube.com',
+    'youtu.be',
+    'twitch.tv',
+];
+
+export const validateExternalUrl = (
+    input: string,
+    allowedHosts?: string[]
+): { ok: true; url: string; hostname: string } | { ok: false; error: string } => {
+    const normalized = ensureHttps(input);
+    if (!normalized) {
+        return { ok: false, error: 'URL is required.' };
+    }
+
+    try {
+        const url = new URL(normalized);
+        const hostname = url.hostname.toLowerCase();
+        const isHttp = url.protocol === 'http:' || url.protocol === 'https:';
+        if (!isHttp) {
+            return { ok: false, error: 'Only http and https URLs are allowed.' };
+        }
+
+        if (allowedHosts && allowedHosts.length > 0) {
+            const allowed = allowedHosts.some((allowedHost) => hostMatches(hostname, allowedHost.toLowerCase()));
+            if (!allowed) {
+                return { ok: false, error: 'This external host is not in the allowlist.' };
+            }
+        }
+
+        return { ok: true, url: url.toString(), hostname };
+    } catch {
+        return { ok: false, error: 'Invalid URL format.' };
+    }
+};
+
 export const isVerifiedSocialLink = (platform: string, input: string): boolean => {
     const host = getHostname(input);
     if (!host) return false;

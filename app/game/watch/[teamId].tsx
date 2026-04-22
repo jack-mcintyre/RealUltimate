@@ -2,11 +2,12 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, Dimensions, Linking, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Dimensions, Linking, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { auth } from '../../../firebaseConfig';
 import BrandedDialog from '../../../src/components/BrandedDialog';
 import { InteractionService } from '../../services/InteractionService';
+import { STREAM_HOST_ALLOWLIST, validateExternalUrl } from '../../services/linkUtils';
 import { LiveFeedService } from '../../services/LiveFeedService';
 import { TeamService } from '../../services/TeamService';
 import { GameState, Team } from '../../services/types';
@@ -686,6 +687,16 @@ export default function LiveFeedScreen() {
     const streamConfig = activeGame ? getStreamConfig(activeGame.streamUrl) : null;
     const onFirePlayers = activeGame?.history ? getOnFirePlayers(activeGame.history) : [];
 
+    const handleOpenStreamExternal = async () => {
+        const candidate = streamConfig?.originalUrl || '';
+        const validated = validateExternalUrl(candidate, STREAM_HOST_ALLOWLIST);
+        if (!validated.ok) {
+            Alert.alert('Blocked URL', 'This stream link is invalid or not from an allowed streaming host.');
+            return;
+        }
+        await Linking.openURL(validated.url);
+    };
+
     // Prediction data
     const predictions = activeGame?.predictions;
     const totalVotes = (predictions?.team1Votes || 0) + (predictions?.team2Votes || 0);
@@ -867,7 +878,7 @@ export default function LiveFeedScreen() {
                                     <View style={styles.liveBadge}><Text style={styles.liveBadgeText}>● LIVE</Text></View>
                                     <Text style={[styles.sectionTitle, {marginLeft: 8, marginBottom: 0, fontWeight: '700', color: colors.text}]}>Match Broadcast</Text>
                                 </View>
-                                <TouchableOpacity onPress={() => Linking.openURL(streamConfig.originalUrl)} style={styles.externalLinkBtn}>
+                                <TouchableOpacity onPress={handleOpenStreamExternal} style={styles.externalLinkBtn}>
                                     <Ionicons name="open-outline" size={16} color={colors.primary} />
                                     <Text style={styles.externalLinkText}>Open App</Text>
                                 </TouchableOpacity>

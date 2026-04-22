@@ -1,5 +1,6 @@
 import { get, onValue, push, ref, set } from 'firebase/database';
 import { db } from '../../firebaseConfig';
+import { isFutureScheduledTimestamp, sanitizeAvailability, SCHEDULE_LIMITS } from './scheduleValidation';
 import { Player, ScheduledGame, Team, TeamPageConfig } from './types';
 
 const sanitizeForFirebase = (value: any): any => {
@@ -355,6 +356,24 @@ export const TeamService = {
             throw new Error('Permission denied');
         }
 
+        const opponentName = (payload.opponentName || '').trim();
+        if (!opponentName) throw new Error('Opponent name is required');
+        if (opponentName.length > SCHEDULE_LIMITS.opponentNameMax) {
+            throw new Error(`Opponent name must be ${SCHEDULE_LIMITS.opponentNameMax} characters or fewer`);
+        }
+
+        const location = (payload.location || '').trim();
+        if (location.length > SCHEDULE_LIMITS.locationMax) {
+            throw new Error(`Location must be ${SCHEDULE_LIMITS.locationMax} characters or fewer`);
+        }
+
+        if (typeof payload.scheduledAt === 'number' && !isFutureScheduledTimestamp(payload.scheduledAt)) {
+            throw new Error('Scheduled games must be in the future');
+        }
+
+        const validPlayerIds = Object.keys(team.players || {});
+        const normalizedAvailability = sanitizeAvailability(payload.availability, validPlayerIds);
+
         const scheduledRef = push(ref(db, `teams/${teamId}/scheduledGames`));
         const id = scheduledRef.key;
         if (!id) throw new Error('Failed to create scheduled game ID');
@@ -363,7 +382,7 @@ export const TeamService = {
             id,
             teamId,
             teamName: team.name,
-            opponentName: payload.opponentName,
+            opponentName,
             createdAt: Date.now(),
             createdBy: payload.createdBy,
         };
@@ -372,16 +391,16 @@ export const TeamService = {
             scheduledGame.opponentTeamId = payload.opponentTeamId;
         }
 
-        if (payload.location && payload.location.trim()) {
-            scheduledGame.location = payload.location.trim();
+        if (location) {
+            scheduledGame.location = location;
         }
 
         if (typeof payload.scheduledAt === 'number') {
             scheduledGame.scheduledAt = payload.scheduledAt;
         }
 
-        if (payload.availability && Object.keys(payload.availability).length > 0) {
-            scheduledGame.availability = payload.availability;
+        if (Object.keys(normalizedAvailability).length > 0) {
+            scheduledGame.availability = normalizedAvailability;
         }
 
         await set(scheduledRef, scheduledGame);
@@ -432,6 +451,24 @@ export const TeamService = {
             throw new Error('Permission denied');
         }
 
+        const opponentName = (updates.opponentName || '').trim();
+        if (!opponentName) throw new Error('Opponent name is required');
+        if (opponentName.length > SCHEDULE_LIMITS.opponentNameMax) {
+            throw new Error(`Opponent name must be ${SCHEDULE_LIMITS.opponentNameMax} characters or fewer`);
+        }
+
+        const location = (updates.location || '').trim();
+        if (location.length > SCHEDULE_LIMITS.locationMax) {
+            throw new Error(`Location must be ${SCHEDULE_LIMITS.locationMax} characters or fewer`);
+        }
+
+        if (typeof updates.scheduledAt === 'number' && !isFutureScheduledTimestamp(updates.scheduledAt)) {
+            throw new Error('Scheduled games must be in the future');
+        }
+
+        const validPlayerIds = Object.keys(team.players || {});
+        const normalizedAvailability = sanitizeAvailability(updates.availability, validPlayerIds);
+
         const gameRef = ref(db, `teams/${teamId}/scheduledGames/${scheduledGameId}`);
         const snapshot = await get(gameRef);
         if (!snapshot.exists()) throw new Error('Scheduled game not found');
@@ -439,11 +476,11 @@ export const TeamService = {
         const current = snapshot.val() as ScheduledGame;
         const nextGame: ScheduledGame = {
             ...current,
-            opponentName: updates.opponentName.trim(),
+            opponentName,
         };
 
-        if (updates.location && updates.location.trim()) {
-            nextGame.location = updates.location.trim();
+        if (location) {
+            nextGame.location = location;
         } else {
             delete nextGame.location;
         }
@@ -454,8 +491,8 @@ export const TeamService = {
             delete nextGame.scheduledAt;
         }
 
-        if (updates.availability && Object.keys(updates.availability).length > 0) {
-            nextGame.availability = updates.availability;
+        if (Object.keys(normalizedAvailability).length > 0) {
+            nextGame.availability = normalizedAvailability;
         } else {
             delete nextGame.availability;
         }

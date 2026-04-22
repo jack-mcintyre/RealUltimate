@@ -4,6 +4,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Linking, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { auth } from '../../../../firebaseConfig';
+import { sanitizeAvailability, validateScheduledGameDraft } from '../../../services/scheduleValidation';
 import { TeamService } from '../../../services/TeamService';
 import { ScheduledAvailabilityStatus, ScheduledGame, Team } from '../../../services/types';
 import { getTypography, Layout } from '../../../theme/DesignSystem';
@@ -125,42 +126,26 @@ export default function ScheduledGameDetailScreen() {
 
         setFormError('');
 
-        if (!opponentName.trim()) {
-            setFormError('Opponent name is required.');
+        const validation = validateScheduledGameDraft({
+            opponentName,
+            location,
+            scheduleDate: scheduledDate,
+            scheduleTime: scheduledTime,
+        });
+        if (!validation.ok) {
+            setFormError(validation.error);
             return;
         }
 
-        if (!scheduledDate && scheduledTime) {
-            setFormError('Select a date before setting a time, or clear time for TBD.');
-            return;
-        }
-
-        let nextScheduledAt: number | undefined;
-        if (scheduledDate) {
-            const merged = new Date(scheduledDate);
-            if (scheduledTime) {
-                merged.setHours(scheduledTime.getHours(), scheduledTime.getMinutes(), 0, 0);
-            } else {
-                merged.setHours(23, 59, 0, 0);
-            }
-
-            nextScheduledAt = merged.getTime();
-            if (nextScheduledAt <= Date.now()) {
-                setFormError('Scheduled games must be in the future.');
-                return;
-            }
-        }
-
-        const normalizedAvailability = Object.fromEntries(
-            Object.entries(availability).filter(([, status]) => status === 'yes' || status === 'no')
-        );
+        const validPlayerIds = playerList.map((player) => player.id).filter(Boolean);
+        const normalizedAvailability = sanitizeAvailability(availability, validPlayerIds);
 
         try {
             setIsSaving(true);
             await TeamService.updateScheduledGame(team.id, scheduledGame.id, auth.currentUser.uid, {
-                opponentName,
-                location,
-                scheduledAt: nextScheduledAt,
+                opponentName: validation.opponentName,
+                location: validation.location,
+                scheduledAt: validation.scheduledAt,
                 availability: normalizedAvailability,
             });
             Alert.alert('Saved', 'Scheduled game updated.');

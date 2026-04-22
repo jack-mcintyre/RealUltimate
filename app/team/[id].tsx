@@ -6,6 +6,7 @@ import { Alert, Image, KeyboardAvoidingView, Linking, Modal, Platform, ScrollVie
 import { auth } from '../../firebaseConfig';
 import { GameService } from '../services/GameService';
 import { ensureHttps, getHostname } from '../services/linkUtils';
+import { sanitizeAvailability, validateScheduledGameDraft } from '../services/scheduleValidation';
 import { TeamService } from '../services/TeamService';
 import { GameState, ScheduledAvailabilityStatus, ScheduledGame, Team } from '../services/types';
 import { getTypography, Layout } from '../theme/DesignSystem';
@@ -138,35 +139,30 @@ export default function TeamDashboardScreen() {
     const handleCreateScheduledGame = async () => {
         if (!team || !auth.currentUser) return;
         setScheduleFormError('');
-        if (!scheduleOpponentName.trim()) {
-            setScheduleFormError('Enter an opponent name.');
+
+        const validation = validateScheduledGameDraft({
+            opponentName: scheduleOpponentName,
+            location: scheduleLocation,
+            scheduleDate,
+            scheduleTime,
+        });
+        if (!validation.ok) {
+            setScheduleFormError(validation.error);
             return;
         }
 
-        let scheduledAt: number | undefined;
-        if (scheduleDate) {
-            const merged = new Date(scheduleDate);
-            if (scheduleTime) {
-                merged.setHours(scheduleTime.getHours(), scheduleTime.getMinutes(), 0, 0);
-            } else {
-                merged.setHours(23, 59, 0, 0);
-            }
-            scheduledAt = merged.getTime();
-            if (scheduledAt <= Date.now()) {
-                setScheduleFormError('Scheduled games must be in the future.');
-                return;
-            }
-        }
+        const validPlayerIds = Object.keys(team.players || {});
+        const normalizedAvailability = sanitizeAvailability(scheduleAvailability, validPlayerIds);
 
         try {
             setIsSavingSchedule(true);
             await TeamService.createScheduledGame(team.id, {
                 teamName: team.name,
-                opponentName: scheduleOpponentName.trim(),
+                opponentName: validation.opponentName,
                 opponentTeamId: '',
-                location: scheduleLocation.trim(),
-                scheduledAt,
-                availability: scheduleAvailability,
+                location: validation.location,
+                scheduledAt: validation.scheduledAt,
+                availability: normalizedAvailability,
                 createdBy: auth.currentUser.uid,
             });
 

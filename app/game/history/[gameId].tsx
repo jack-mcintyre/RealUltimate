@@ -8,6 +8,7 @@ import { WebView } from 'react-native-webview';
 import { auth } from '../../../firebaseConfig';
 import BrandedDialog from '../../../src/components/BrandedDialog';
 import { GameService } from '../../services/GameService';
+import { STREAM_HOST_ALLOWLIST, validateExternalUrl } from '../../services/linkUtils';
 import { TeamService } from '../../services/TeamService';
 import { GameState, PlayerStats, PredictionSnapshot, Team } from '../../services/types';
 import { getTypography, Layout } from '../../theme/DesignSystem';
@@ -139,6 +140,8 @@ const BoxScoreCard = React.forwardRef<View, {
         </View>
     );
 });
+
+BoxScoreCard.displayName = 'BoxScoreCard';
 
 // --- Prediction Chart (Mini) ---
 const PredictionChart = ({ snapshots, team1Name, team2Name, colors }: { snapshots: PredictionSnapshot[]; team1Name: string; team2Name: string; colors: ThemeColors }) => {
@@ -1280,7 +1283,7 @@ export default function GameHistoryScreen() {
                     : 'No legacy issues found to repair.',
                 icon: 'construct-outline',
             });
-        } catch (error) {
+        } catch {
             setInfoDialog({
                 title: 'Repair Failed',
                 message: 'Could not repair legacy game data.',
@@ -1298,6 +1301,21 @@ export default function GameHistoryScreen() {
 
     const streamConfig = getStreamConfig(game.streamUrl);
     const matchDate = game.history && game.history.length > 0 ? new Date(game.history[0].timestamp).toLocaleDateString() : 'Unknown Date';
+
+    const handleOpenStreamExternal = async () => {
+        const candidate = streamConfig?.originalUrl || '';
+        const validated = validateExternalUrl(candidate, STREAM_HOST_ALLOWLIST);
+        if (!validated.ok) {
+            setInfoDialog({
+                title: 'Blocked URL',
+                message: 'This stream link is invalid or not from an allowed streaming host.',
+                icon: 'warning-outline',
+                accentColor: colors.error,
+            });
+            return;
+        }
+        await Linking.openURL(validated.url);
+    };
 
     // Prediction data
     const predictionSnapshots = game.predictions?.snapshots || [];
@@ -1411,7 +1429,7 @@ export default function GameHistoryScreen() {
                                     <View style={[styles.liveBadge, { backgroundColor: colors.textSecondary }]}><Text style={styles.liveBadgeText}>VOD</Text></View>
                                     <Text style={[styles.sectionTitle, {marginLeft: 8, marginBottom: 0, fontWeight: '700', color: colors.text}]}>Match Recording</Text>
                                 </View>
-                                <TouchableOpacity onPress={() => Linking.openURL(streamConfig.originalUrl)} style={styles.externalLinkBtn}>
+                                <TouchableOpacity onPress={handleOpenStreamExternal} style={styles.externalLinkBtn}>
                                     <Ionicons name="open-outline" size={16} color={colors.primary} />
                                     <Text style={styles.externalLinkText}>Open</Text>
                                 </TouchableOpacity>
@@ -1503,7 +1521,7 @@ export default function GameHistoryScreen() {
                                 </View>
                                 <Text style={styles.mvpName}>{mvp.name}</Text>
                                 <Text style={styles.mvpStatsString}>
-                                    {mvp.goals} Goals • {mvp.assists} Assists • {mvp.blocks} D's {mvp.callahans > 0 ? `• ${mvp.callahans} Callahans` : ''}
+                                    {mvp.goals} Goals • {mvp.assists} Assists • {mvp.blocks} Ds {mvp.callahans > 0 ? `• ${mvp.callahans} Callahans` : ''}
                                 </Text>
                             </TouchableOpacity>
                             
@@ -1989,8 +2007,8 @@ export default function GameHistoryScreen() {
                         )}
 
                         {streamConfig && streamConfig.videoId && (
-                            <Text style={[styles.sectionSubtitle, { color: colors.primary }]}>
-                                🎥 Tap "Watch" to skip the video to the match event.
+                            <Text style={[styles.sectionSubtitle, { color: colors.primary }]}> 
+                                🎥 Tap Watch to skip the video to the match event.
                             </Text>
                         )}
                         {(!game.history || game.history.length === 0) ? (
