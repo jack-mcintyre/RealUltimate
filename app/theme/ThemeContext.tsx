@@ -1,9 +1,8 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { get, ref, set } from 'firebase/database';
+import React, { createContext, ReactNode, useContext, useEffect, useState } from 'react';
 import { useColorScheme } from 'react-native';
-import { LightColors, DarkColors } from './DesignSystem';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { ref, get, set } from 'firebase/database';
-import { db, auth } from '../../firebaseConfig';
+import { auth, db } from '../../firebaseConfig';
+import { DarkColors, LightColors } from './DesignSystem';
 
 export type ThemeColors = typeof LightColors;
 
@@ -26,29 +25,30 @@ const ThemeContext = createContext<ThemeContextType>({
 export const ThemeProvider = ({ children }: { children: ReactNode }) => {
     const systemColorScheme = useColorScheme();
     const [themePref, setThemePrefState] = useState<'light' | 'dark' | 'system'>('light');
+    const currentUserId = auth.currentUser?.uid || null;
 
     useEffect(() => {
         const loadTheme = async () => {
-            if (auth.currentUser) {
+            if (currentUserId) {
                 try {
-                    const snap = await get(ref(db, `users/${auth.currentUser.uid}/settings/themePref`));
+                    const snap = await get(ref(db, `users/${currentUserId}/settings/themePref`));
                     if (snap.exists()) {
                         setThemePrefState(snap.val());
                     }
-                } catch (e) {
+                } catch {
                     console.error("Failed to load theme preference");
                 }
             }
         };
         loadTheme();
-    }, [auth.currentUser]);
+    }, [currentUserId]);
 
     const setThemePref = async (pref: 'light' | 'dark' | 'system') => {
         setThemePrefState(pref);
-        if (auth.currentUser) {
+        if (currentUserId) {
             try {
-                await set(ref(db, `users/${auth.currentUser.uid}/settings/themePref`), pref);
-            } catch (e) {
+                await set(ref(db, `users/${currentUserId}/settings/themePref`), pref);
+            } catch {
                 console.error("Failed to save theme preference");
             }
         }

@@ -63,7 +63,6 @@ const FloatingEmoji = ({ emoji, index }: { emoji: string; index: number }) => {
     const translateY = useRef(new Animated.Value(0)).current;
     const opacity = useRef(new Animated.Value(1)).current;
     const scale = useRef(new Animated.Value(0.3)).current;
-    const screenWidth = Dimensions.get('window').width;
     const randomX = useRef(Math.random() * 60 + 10).current; // 10-70% from left
 
     useEffect(() => {
@@ -75,7 +74,7 @@ const FloatingEmoji = ({ emoji, index }: { emoji: string; index: number }) => {
             ]),
             Animated.timing(opacity, { toValue: 0, duration: 3000, useNativeDriver: true }),
         ]).start();
-    }, []);
+    }, [opacity, scale, translateY]);
 
     return (
         <Animated.Text
@@ -185,11 +184,6 @@ const FlyingDisc = ({
             />
         </Animated.View>
     );
-};
-
-// --- Momentum Bar Component ---
-const MomentumBar = ({ history, team1Id, colors }: { history: any[]; team1Id: string; colors: ThemeColors }) => {
-// Removed MomentumBar as requested
 };
 
 // --- Check "On Fire" status ---

@@ -60,7 +60,7 @@ export default function ScheduledGameDetailScreen() {
             setScheduledDate(null);
             setScheduledTime(null);
         }
-    }, [scheduledGame?.id]);
+    }, [scheduledGame]);
 
     const playerList = useMemo(() => {
         if (!team?.players) return [];

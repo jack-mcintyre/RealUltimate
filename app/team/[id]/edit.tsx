@@ -4,6 +4,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Image, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { auth } from '../../../firebaseConfig';
+import ImageCropperModal from '../../../src/components/ImageCropperModal';
 import { ensureHttps, isHttpUrl, isVerifiedMediaLink, isVerifiedSocialLink } from '../../services/linkUtils';
 import { TeamService } from '../../services/TeamService';
 import { SocialLinks, Team, TeamMediaItem, TeamPageConfig } from '../../services/types';
@@ -26,6 +27,7 @@ export default function TeamEditPageScreen() {
     const [avatarUrl, setAvatarUrl] = useState('');
     const [bannerUrl, setBannerUrl] = useState('');
     const [bio, setBio] = useState('');
+    const [coachDisplayName, setCoachDisplayName] = useState('');
 
     const [isPublic, setIsPublic] = useState(true);
     const [advancedStatsPublic, setAdvancedStatsPublic] = useState(true);
@@ -44,6 +46,12 @@ export default function TeamEditPageScreen() {
     const [isSaving, setIsSaving] = useState(false);
     const [errorText, setErrorText] = useState('');
     const [showSavedToast, setShowSavedToast] = useState(false);
+    const [cropTarget, setCropTarget] = useState<{
+        uri: string;
+        width: number;
+        height: number;
+        target: 'avatar' | 'banner';
+    } | null>(null);
     const hideToastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
@@ -65,6 +73,7 @@ export default function TeamEditPageScreen() {
         setAvatarUrl(branding.avatarUrl || '');
         setBannerUrl(branding.bannerUrl || '');
         setBio(branding.bio || '');
+        setCoachDisplayName((branding.coachDisplayName || '').trim());
 
         setIsPublic(settings.isPublic ?? true);
         setAdvancedStatsPublic(settings.advancedStatsPublic ?? true);
@@ -99,34 +108,28 @@ export default function TeamEditPageScreen() {
         setSocialLinks((prev) => ({ ...prev, [key]: value }));
     };
 
-    const pickImageDataUrl = async (aspect: [number, number]) => {
+    const pickImageForCrop = async (targetType: 'avatar' | 'banner') => {
         const result = await ImagePicker.launchImageLibraryAsync({
             mediaTypes: ['images'],
-            allowsEditing: true,
-            aspect,
-            quality: 0.72,
-            base64: true,
+            allowsEditing: false,
+            quality: 1,
         });
 
-        if (result.canceled || !result.assets?.[0]) return '';
+        if (result.canceled || !result.assets?.[0]) return;
         const asset = result.assets[0];
-        if (!asset.base64) {
-            throw new Error('Image data not available');
-        }
+        if (!asset.uri) throw new Error('Image URI not available');
 
-        const mime = asset.mimeType || 'image/jpeg';
-        const dataUrl = `data:${mime};base64,${asset.base64}`;
-        if (dataUrl.length > MAX_IMAGE_DATA_URL_LENGTH) {
-            throw new Error('Image too large. Choose a smaller image.');
-        }
-
-        return dataUrl;
+        setCropTarget({
+            uri: asset.uri,
+            width: asset.width || 1000,
+            height: asset.height || 1000,
+            target: targetType,
+        });
     };
 
     const handlePickAvatar = async () => {
         try {
-            const next = await pickImageDataUrl([1, 1]);
-            if (next) setAvatarUrl(next);
+            await pickImageForCrop('avatar');
         } catch (error: any) {
             setErrorText(error?.message || 'Could not pick image.');
         }
@@ -134,11 +137,20 @@ export default function TeamEditPageScreen() {
 
     const handlePickBanner = async () => {
         try {
-            const next = await pickImageDataUrl([16, 6]);
-            if (next) setBannerUrl(next);
+            await pickImageForCrop('banner');
         } catch (error: any) {
             setErrorText(error?.message || 'Could not pick image.');
         }
+    };
+
+    const handleCropConfirm = (dataUrl: string) => {
+        if (!cropTarget) return;
+        if (cropTarget.target === 'avatar') {
+            setAvatarUrl(dataUrl);
+        } else {
+            setBannerUrl(dataUrl);
+        }
+        setCropTarget(null);
     };
 
     const handleAddMedia = () => {
@@ -227,6 +239,7 @@ export default function TeamEditPageScreen() {
                     avatarUrl: avatarUrl.trim(),
                     bannerUrl: bannerUrl.trim(),
                     bio: bio.trim(),
+                    coachDisplayName: coachDisplayName.trim(),
                 },
                 settings: {
                     isPublic,
@@ -327,6 +340,15 @@ export default function TeamEditPageScreen() {
                     {!!bannerUrl && <Image source={{ uri: bannerUrl }} style={styles.bannerPreview} resizeMode="cover" />}
 
                     <TextInput
+                        style={styles.input}
+                        placeholder="Coach display name override (optional)"
+                        placeholderTextColor={colors.textSecondary}
+                        value={coachDisplayName}
+                        onChangeText={setCoachDisplayName}
+                        maxLength={40}
+                    />
+
+                    <TextInput
                         style={[styles.input, { minHeight: 92, textAlignVertical: 'top' }]}
                         placeholder="Team bio"
                         placeholderTextColor={colors.textSecondary}
@@ -375,14 +397,23 @@ export default function TeamEditPageScreen() {
                 <View style={styles.card}>
                     <Text style={styles.cardTitle}>Theme Controls</Text>
                     <View style={styles.typeRow}>
-                        {ACCENT_PRESETS.map((hex) => (
-                            <TouchableOpacity
-                                key={`accent-${hex}`}
-                                style={[styles.colorChip, { backgroundColor: hex }, accentColor.toLowerCase() === hex.toLowerCase() && styles.colorChipActive]}
-                                onPress={() => setAccentColor(hex)}
-                                activeOpacity={0.85}
-                            />
-                        ))}
+                        {ACCENT_PRESETS.map((hex) => {
+                            const isSelected = accentColor.toLowerCase() === hex.toLowerCase();
+                            return (
+                                <TouchableOpacity
+                                    key={`accent-${hex}`}
+                                    style={[styles.colorChip, { backgroundColor: hex }, isSelected && styles.colorChipActive]}
+                                    onPress={() => setAccentColor(hex)}
+                                    activeOpacity={0.85}
+                                >
+                                    {isSelected && <Ionicons name="checkmark" size={13} color={colors.onPrimary} style={styles.colorChipCheck} />}
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </View>
+                    <View style={styles.selectedAccentRow}>
+                        <View style={[styles.selectedAccentSwatch, { backgroundColor: accentColor || ACCENT_PRESETS[0] }]} />
+                        <Text style={styles.selectedAccentText}>Current accent: {accentColor || ACCENT_PRESETS[0]}</Text>
                     </View>
                 </View>
 
@@ -486,6 +517,17 @@ export default function TeamEditPageScreen() {
                     </View>
                 </View>
             )}
+
+            <ImageCropperModal
+                visible={!!cropTarget}
+                shape={cropTarget?.target === 'avatar' ? 'circle' : 'banner'}
+                title={cropTarget?.target === 'avatar' ? 'Crop Profile Image' : 'Crop Banner Image'}
+                target={cropTarget ? { uri: cropTarget.uri, width: cropTarget.width, height: cropTarget.height } : null}
+                maxDataUrlLength={MAX_IMAGE_DATA_URL_LENGTH}
+                onCancel={() => setCropTarget(null)}
+                onConfirm={handleCropConfirm}
+                onError={(message) => setErrorText(message)}
+            />
         </View>
     );
 }
@@ -544,8 +586,25 @@ const getStyles = (colors: ThemeColors) => {
             paddingVertical: 10,
         },
         imageClearBtnText: { ...Typography.bodySmall, color: colors.textSecondary, fontWeight: '700' },
-        avatarPreview: { width: 86, height: 86, borderRadius: 43, alignSelf: 'center', marginBottom: 10, backgroundColor: colors.surfaceSecondary },
-        bannerPreview: { width: '100%', height: 110, borderRadius: Layout.radiusSm, marginBottom: 10, backgroundColor: colors.surfaceSecondary },
+        avatarPreview: {
+            width: 92,
+            height: 92,
+            borderRadius: 46,
+            alignSelf: 'center',
+            marginBottom: 10,
+            backgroundColor: colors.surfaceSecondary,
+            borderWidth: 1,
+            borderColor: colors.border,
+        },
+        bannerPreview: {
+            width: '100%',
+            aspectRatio: 16 / 6,
+            borderRadius: Layout.radiusSm,
+            marginBottom: 10,
+            backgroundColor: colors.surfaceSecondary,
+            borderWidth: 1,
+            borderColor: colors.border,
+        },
         input: {
             ...Typography.body,
             color: colors.text,
@@ -575,8 +634,39 @@ const getStyles = (colors: ThemeColors) => {
         typeChipActive: { borderColor: colors.primary, backgroundColor: colors.primaryLight },
         typeChipText: { ...Typography.bodySmall, color: colors.textSecondary, fontWeight: '700' },
         typeChipTextActive: { color: colors.primary },
-        colorChip: { width: 26, height: 26, borderRadius: 13, borderWidth: 2, borderColor: 'transparent' },
+        colorChip: {
+            width: 28,
+            height: 28,
+            borderRadius: 14,
+            borderWidth: 2,
+            borderColor: 'transparent',
+            alignItems: 'center',
+            justifyContent: 'center',
+        },
         colorChipActive: { borderColor: colors.text },
+        colorChipCheck: {
+            textShadowColor: 'rgba(0,0,0,0.35)',
+            textShadowOffset: { width: 0, height: 1 },
+            textShadowRadius: 1,
+        },
+        selectedAccentRow: {
+            marginTop: 4,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+        },
+        selectedAccentSwatch: {
+            width: 14,
+            height: 14,
+            borderRadius: 7,
+            borderWidth: 1,
+            borderColor: colors.border,
+        },
+        selectedAccentText: {
+            ...Typography.bodySmall,
+            color: colors.textSecondary,
+            fontWeight: '600',
+        },
         verifiedHintText: { ...Typography.bodySmall, color: colors.textSecondary, marginBottom: 8 },
 
         addMediaBtn: {

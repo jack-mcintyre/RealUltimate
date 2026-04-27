@@ -557,9 +557,9 @@ const FieldMapVisualizer = ({
          }
     }
 
-    const { eventFrom, eventTo, prevEvent } = activeEvent
+    const { eventFrom, eventTo } = activeEvent
         ? resolveReplayCoords(mapEvents, resolvedActiveIdx, activeEvent)
-        : { eventFrom: null, eventTo: null, prevEvent: null };
+        : { eventFrom: null, eventTo: null };
 
     if (!activeEvent || (!eventFrom && !eventTo)) {
         if (!activeEventId) return null;

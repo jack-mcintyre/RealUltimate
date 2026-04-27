@@ -33,6 +33,7 @@ export interface PlayerStats {
 export interface TeamManager {
   email: string;
   role: string;
+  displayName?: string;
 }
 
 export interface SocialLinks {
@@ -57,6 +58,7 @@ export interface TeamPageBranding {
   avatarUrl?: string;
   bannerUrl?: string;
   bio?: string;
+  coachDisplayName?: string;
 }
 
 export interface TeamPageSettings {
@@ -94,13 +96,18 @@ export interface Team {
   id: string;
   coachId: string;
   name: string;
-  accessCode: string; // Coach Code
+  accessCode?: string; // Coach Code (legacy; new teams store under teamJoinCodes)
   spectatorCode?: string; // Spectator Code (Optional for backward compatibility)
   players: Record<string, Player>; // Map player ID to Player for easy access
   managers?: Record<string, TeamManager>; // RBAC Permissions map
   role?: 'coach' | 'spectator'; // Client-side only - indicates user's relation
   activeGameId?: string; // Tethers a running game session to this team
   pageConfig?: TeamPageConfig;
+}
+
+export interface TeamJoinCodes {
+  coach: string;
+  spectator: string;
 }
 
 export type ScheduledAvailabilityStatus = 'yes' | 'no';
@@ -116,6 +123,87 @@ export interface ScheduledGame {
   availability?: Record<string, ScheduledAvailabilityStatus>;
   createdAt: number;
   createdBy: string;
+}
+
+export type TournamentPrivacy = 'public' | 'private';
+export type TournamentEnrollmentMode = 'manual' | 'open';
+export type TournamentEngine = 'single_elim' | 'pool_to_bracket';
+export type TournamentSeeding = 'manual' | 'rating' | 'random';
+export type TournamentStatus = 'draft' | 'active' | 'completed';
+export type TournamentStage = 'pool' | 'championship' | 'consolation';
+
+export interface TournamentParticipant {
+  id: string;
+  name: string;
+  seed: number;
+  rating?: number;
+  linkedTeamId?: string;
+}
+
+export interface TournamentStanding {
+  participantId: string;
+  wins: number;
+  losses: number;
+  pointsFor: number;
+  pointsAgainst: number;
+  pointDiff: number;
+  rank: number;
+}
+
+export interface TournamentMatch {
+  id: string;
+  stage: TournamentStage;
+  round: number;
+  group?: string;
+  teamAId: string;
+  teamBId: string;
+  teamAScore?: number;
+  teamBScore?: number;
+  winnerId?: string;
+  loserId?: string;
+  nextMatchId?: string;
+  nextSlot?: 'A' | 'B';
+  consolationNextMatchId?: string;
+  consolationNextSlot?: 'A' | 'B';
+  scheduledTime?: string;
+}
+
+export interface TournamentSpiritScore {
+  participantId: string;
+  rules: number;
+  fouls: number;
+  fairness: number;
+  attitude: number;
+  communication: number;
+  total: number;
+}
+
+export interface Tournament {
+  id: string;
+  teamId?: string;
+  teamName?: string;
+  hostName?: string;
+  name: string;
+  privacy: TournamentPrivacy;
+  joinCode?: string;
+  adminCode?: string;
+  admins?: Record<string, boolean>;
+  enrollmentMode: TournamentEnrollmentMode;
+  engine: TournamentEngine;
+  seeding: TournamentSeeding;
+  includeConsolation: boolean;
+  status: TournamentStatus;
+  createdAt: number;
+  startDate?: string;
+  endDate?: string;
+  enrollmentDeadline?: string;
+  createdBy: string;
+  participants: Record<string, TournamentParticipant>;
+  pools?: Record<string, string[]>;
+  qualifierCount?: number;
+  matches: Record<string, TournamentMatch>;
+  standings?: Record<string, TournamentStanding>;
+  spiritScores?: Record<string, TournamentSpiritScore>;
 }
 
 export type EventType =

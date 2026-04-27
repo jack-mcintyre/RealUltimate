@@ -18,7 +18,7 @@ export const InteractionService = {
             
             // Auto-cleanup: remove reaction after 10 seconds
             setTimeout(async () => {
-                try { await set(reactionRef, null); } catch (_) { /* ignore */ }
+                try { await set(reactionRef, null); } catch { /* ignore */ }
             }, 10000);
         } catch (e) {
             // Silently fail — reactions are non-critical

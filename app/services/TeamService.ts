@@ -1,7 +1,16 @@
 import { get, onValue, push, ref, set } from 'firebase/database';
 import { db } from '../../firebaseConfig';
 import { isFutureScheduledTimestamp, sanitizeAvailability, SCHEDULE_LIMITS } from './scheduleValidation';
-import { Player, ScheduledGame, Team, TeamPageConfig } from './types';
+import { Player, ScheduledGame, Team, TeamJoinCodes, TeamPageConfig } from './types';
+
+const TEAM_LIMITS = Object.freeze({
+    nameMin: 2,
+    nameMax: 64,
+});
+
+const normalizeTeamName = (value: string): string => {
+    return (value || '').replace(/\s+/g, ' ').trim();
+};
 
 const sanitizeForFirebase = (value: any): any => {
     if (value === undefined) return undefined;
@@ -50,8 +59,16 @@ const generateUniqueAccessCode = async (excludeCode?: string): Promise<string> =
 };
 
 export const TeamService = {
-    createTeam: async (teamName: string, coachId: string, coachEmail: string): Promise<string> => {
+    createTeam: async (teamName: string, coachId: string, coachEmail: string, coachDisplayName?: string): Promise<string> => {
         try {
+            const normalizedTeamName = normalizeTeamName(teamName);
+            if (normalizedTeamName.length < TEAM_LIMITS.nameMin) {
+                throw new Error(`Team name must be at least ${TEAM_LIMITS.nameMin} characters.`);
+            }
+            if (normalizedTeamName.length > TEAM_LIMITS.nameMax) {
+                throw new Error(`Team name must be ${TEAM_LIMITS.nameMax} characters or fewer.`);
+            }
+
             // Push new team to get ID
             const teamsRef = ref(db, 'teams');
             const newTeamRef = push(teamsRef);
@@ -65,12 +82,14 @@ export const TeamService = {
             const newTeam: Team = {
                 id: teamId,
                 coachId,
-                name: teamName,
-                accessCode,
-                spectatorCode,
+                name: normalizedTeamName,
                 players: {},
                 managers: {
-                    [coachId]: { email: coachEmail, role: 'Head Coach' }
+                    [coachId]: {
+                        email: coachEmail,
+                        role: 'Head Coach',
+                        ...(coachDisplayName?.trim() ? { displayName: coachDisplayName.trim() } : {}),
+                    }
                 }
             };
 
@@ -79,6 +98,7 @@ export const TeamService = {
             // Map access code -> { teamId, role }
             await set(ref(db, `accessCodes/${accessCode}`), { teamId, role: 'coach' });
             await set(ref(db, `accessCodes/${spectatorCode}`), { teamId, role: 'spectator' });
+            await set(ref(db, `teamJoinCodes/${teamId}`), { coach: accessCode, spectator: spectatorCode } as TeamJoinCodes);
 
             // Automatically add to user's coached list
             await set(ref(db, `users/${coachId}/coached_teams/${teamId}`), true);
@@ -90,25 +110,50 @@ export const TeamService = {
         }
     },
 
-    joinTeamByCode: async (accessCode: string, userId: string, userEmail: string): Promise<{ teamId: string, role: string } | null> => {
+    joinTeamByCode: async (
+        accessCode: string,
+        userId: string,
+        userEmail: string,
+        userDisplayName?: string
+    ): Promise<{ teamId: string, role: string } | null> => {
         const accessCodeRef = ref(db, `accessCodes/${accessCode}`);
         const snapshot = await get(accessCodeRef);
         if (snapshot.exists()) {
             const data = snapshot.val();
-            // data is { teamId, role }
             
-            // Save relation to user profile!
             const listType = data.role === 'coach' ? 'coached_teams' : 'spectated_teams';
             await set(ref(db, `users/${userId}/${listType}/${data.teamId}`), true);
 
-            // Add manager to team RBAC if coach
             if (data.role === 'coach') {
-                await set(ref(db, `teams/${data.teamId}/managers/${userId}`), { email: userEmail, role: 'Assistant Coach' });
+                await set(ref(db, `teams/${data.teamId}/managers/${userId}`), {
+                    email: userEmail,
+                    role: 'Assistant Coach',
+                    ...(userDisplayName?.trim() ? { displayName: userDisplayName.trim() } : {}),
+                });
             }
 
             return data;
         }
         return null;
+    },
+
+    searchTeams: async (queryText: string): Promise<{ id: string, name: string }[]> => {
+        if (!queryText || queryText.length < 2) return [];
+        const normalized = queryText.toLowerCase().trim();
+        const teamsRef = ref(db, 'teams');
+        const snapshot = await get(teamsRef);
+        if (!snapshot.exists()) return [];
+        
+        const data = snapshot.val();
+        const results: { id: string, name: string }[] = [];
+        
+        Object.entries(data).forEach(([id, team]: [string, any]) => {
+            if (team.name && team.name.toLowerCase().includes(normalized)) {
+                results.push({ id, name: team.name });
+            }
+        });
+        
+        return results.slice(0, 10);
     },
 
     lookupTeamByAccessCode: async (accessCode: string): Promise<Team | null> => {
@@ -164,6 +209,14 @@ export const TeamService = {
         const teamRef = ref(db, `teams/${teamId}`);
         return onValue(teamRef, (snapshot) => {
             const data = snapshot.val();
+            callback(data);
+        });
+    },
+
+    subscribeToTeamJoinCodes: (teamId: string, callback: (codes: TeamJoinCodes | null) => void) => {
+        const codesRef = ref(db, `teamJoinCodes/${teamId}`);
+        return onValue(codesRef, (snapshot) => {
+            const data = snapshot.val() as TeamJoinCodes | null;
             callback(data);
         });
     },
@@ -330,8 +383,6 @@ export const TeamService = {
                 .map(([key, team]) => ({
                     ...(team as Team),
                     id: team?.id || key,
-                    accessCode: '',
-                    spectatorCode: undefined,
                     players: team?.players || {},
                 }))
                 .filter((team) => !!team?.id && !!team?.name);

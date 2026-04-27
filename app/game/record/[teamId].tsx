@@ -482,7 +482,7 @@ export default function RecorderScreen() {
         if (gameState.isGameActive && gameState.advancedTracking && gameState.possession === ourTeam?.id) {
             setSelectedPlayer(discHolderId);
         }
-    }, [discHolderId, gameState.possession, gameState.advancedTracking, gameState.isGameActive]);
+    }, [discHolderId, gameState.possession, gameState.advancedTracking, gameState.isGameActive, ourTeam?.id]);
 
     useEffect(() => {
         let isCancelled = false;
@@ -882,7 +882,7 @@ export default function RecorderScreen() {
             setIsSavingLiveStream(true);
             await updateStreamUrl(inGameStreamUrl);
             Alert.alert('Saved', inGameStreamUrl.trim() ? 'Livestream link updated.' : 'Livestream link removed.');
-        } catch (error) {
+        } catch {
             Alert.alert('Error', 'Could not update livestream link.');
         } finally {
             setIsSavingLiveStream(false);

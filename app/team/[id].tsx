@@ -5,10 +5,10 @@ import React, { useEffect, useState } from 'react';
 import { Alert, Image, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { auth } from '../../firebaseConfig';
 import { GameService } from '../services/GameService';
-import { ensureHttps, getHostname } from '../services/linkUtils';
+import { ensureHttps, getHostname, validateSocialExternalUrl } from '../services/linkUtils';
 import { sanitizeAvailability, validateScheduledGameDraft } from '../services/scheduleValidation';
 import { TeamService } from '../services/TeamService';
-import { GameState, ScheduledAvailabilityStatus, ScheduledGame, Team } from '../services/types';
+import { GameState, ScheduledAvailabilityStatus, ScheduledGame, SocialLinks, Team, TeamJoinCodes, TeamManager } from '../services/types';
 import { getTypography, Layout } from '../theme/DesignSystem';
 import { ThemeColors, useTheme } from '../theme/ThemeContext';
 
@@ -33,6 +33,12 @@ const classifyThrowProfile = (dx: number, dy: number, distance: number, toX: num
 const managerNameFromEmail = (email?: string) => {
     if (!email) return 'Coach';
     return email.split('@')[0] || email;
+};
+
+const managerDisplayName = (manager?: Partial<TeamManager>) => {
+    const displayName = (manager?.displayName || '').trim();
+    if (displayName) return displayName;
+    return managerNameFromEmail(manager?.email);
 };
 
 const hexToRgba = (hex: string, alpha: number) => {
@@ -77,6 +83,7 @@ export default function TeamDashboardScreen() {
     const [team, setTeam] = useState<Team | null>(null);
     const [pastGames, setPastGames] = useState<GameState[]>([]);
     const [scheduledGames, setScheduledGames] = useState<ScheduledGame[]>([]);
+    const [joinCodes, setJoinCodes] = useState<TeamJoinCodes | null>(null);
 
     // Player Input
     const [playerName, setPlayerName] = useState('');
@@ -100,6 +107,7 @@ export default function TeamDashboardScreen() {
 
     const { isDark, colors } = useTheme();
     const styles = getStyles(colors);
+    const currentUserId = auth.currentUser?.uid || '';
 
     useEffect(() => {
         if (!id) return;
@@ -123,6 +131,23 @@ export default function TeamDashboardScreen() {
             unsubscribeScheduled();
         };
     }, [id]);
+
+    useEffect(() => {
+        if (!id || !team || preview === 'public') {
+            setJoinCodes(null);
+            return;
+        }
+
+        const canEdit = currentUserId === team.coachId || !!team.managers?.[currentUserId];
+        if (!canEdit) {
+            setJoinCodes(null);
+            return;
+        }
+
+        return TeamService.subscribeToTeamJoinCodes(id, (codes) => {
+            setJoinCodes(codes);
+        });
+    }, [id, preview, team, currentUserId]);
 
     const handleScheduleDateChange = (_event: DateTimePickerEvent, selected?: Date) => {
         if (Platform.OS === 'android') setShowDatePicker(false);
@@ -215,6 +240,15 @@ export default function TeamDashboardScreen() {
         await Linking.openURL(normalized);
     };
 
+    const handleOpenSocialExternal = async (platform: keyof SocialLinks, url: string) => {
+        const validated = validateSocialExternalUrl(platform, url);
+        if (!validated.ok) {
+            Alert.alert('Invalid URL', validated.error);
+            return;
+        }
+        await Linking.openURL(validated.url);
+    };
+
     const handleScheduleAvailability = (playerId: string, value: ScheduledAvailabilityStatus) => {
         setScheduleAvailability((prev) => ({ ...prev, [playerId]: value }));
     };
@@ -246,7 +280,6 @@ export default function TeamDashboardScreen() {
 
     if (!team) return <View style={styles.centerContainer}><Text style={styles.loadingText}>Loading Team...</Text></View>;
 
-    const currentUserId = auth.currentUser?.uid || '';
     const isPreviewPublic = preview === 'public';
     const isCoach = currentUserId === team.coachId && !isPreviewPublic;
     const isManager = !!team.managers?.[currentUserId] && !isPreviewPublic;
@@ -288,10 +321,11 @@ export default function TeamDashboardScreen() {
 
     const managerEntries = Object.entries(team.managers || {});
     const headCoachEntry = managerEntries.find(([, manager]) => manager.role === 'Head Coach');
-    const headCoachName = managerNameFromEmail(headCoachEntry?.[1]?.email);
+    const headCoachNameOverride = (pageConfig.branding?.coachDisplayName || '').trim();
+    const headCoachName = headCoachNameOverride || managerDisplayName(headCoachEntry?.[1]);
     const coCoachNames = managerEntries
         .filter(([, manager]) => manager.role !== 'Head Coach')
-        .map(([, manager]) => managerNameFromEmail(manager.email));
+        .map(([, manager]) => managerDisplayName(manager));
 
     const handleDeleteTeam = () => {
         if (Platform.OS === 'web') {
@@ -605,7 +639,7 @@ export default function TeamDashboardScreen() {
                                 <TouchableOpacity
                                     key={`team-social-${entry.key}`}
                                     style={[styles.socialIconBtn, { borderColor: teamAccent, backgroundColor: colors.surfaceSecondary }]}
-                                    onPress={() => handleOpenExternal(entry.url)}
+                                    onPress={() => handleOpenSocialExternal(entry.key as keyof SocialLinks, entry.url)}
                                     activeOpacity={0.8}
                                 >
                                     {entry.key === 'x' ? (
@@ -622,11 +656,11 @@ export default function TeamDashboardScreen() {
                         <View style={styles.codeContainerRow}>
                             <View style={[styles.codeBadge, { borderColor: teamAccentSoft }]}>
                                 <Text style={styles.codeBadgeLabel}>COACH CODE</Text>
-                                <Text style={styles.codeBadgeCode}>{team.accessCode}</Text>
+                                <Text style={styles.codeBadgeCode}>{joinCodes?.coach || 'Unavailable'}</Text>
                             </View>
                             <View style={[styles.codeBadge, { borderColor: teamAccentSoft }]}>
                                 <Text style={styles.codeBadgeLabel}>FAN CODE</Text>
-                                <Text style={styles.codeBadgeCode}>{team.spectatorCode}</Text>
+                                <Text style={styles.codeBadgeCode}>{joinCodes?.spectator || 'Unavailable'}</Text>
                             </View>
                         </View>
                     )}
@@ -1223,7 +1257,7 @@ const getStyles = (colors: ThemeColors) => {
         infoCard: { alignItems: 'center', padding: 16, backgroundColor: colors.surface, borderRadius: Layout.radiusLg, marginBottom: 24, borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
         teamBannerWrap: {
             width: '100%',
-            height: 120,
+            aspectRatio: 16 / 6,
             borderRadius: Layout.radiusMd,
             overflow: 'hidden',
             marginBottom: 12,
@@ -1239,24 +1273,23 @@ const getStyles = (colors: ThemeColors) => {
         },
         teamBannerPlaceholderText: { ...Typography.bodySmall, color: colors.primary, fontWeight: '700', letterSpacing: 1 },
         teamAvatarOverlay: {
-            marginTop: -44,
+            marginTop: -48,
             marginBottom: 2,
-            width: 84,
-            height: 84,
-            borderWidth: 2,
+            width: 96,
+            height: 96,
+            borderWidth: 3,
             borderColor: colors.surface,
-            borderRadius: 42,
+            borderRadius: 48,
             overflow: 'hidden',
             alignItems: 'center',
             justifyContent: 'center',
         },
         teamAvatarImage: {
-            width: 80,
-            height: 80,
-            borderRadius: 40,
+            width: '100%',
+            height: '100%',
             backgroundColor: colors.surfaceSecondary,
         },
-        teamBadgeLg: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
+        teamBadgeLg: { width: '100%', height: '100%', borderRadius: 48, backgroundColor: colors.primaryLight, alignItems: 'center', justifyContent: 'center' },
         teamBadgeTextLg: { ...Typography.title, fontSize: 32, color: colors.primary },
         teamNameTitle: { ...Typography.title, fontSize: 24, marginBottom: 10, textAlign: 'center' },
         teamBioText: { ...Typography.bodySmall, color: colors.textSecondary, textAlign: 'center', marginBottom: 10 },

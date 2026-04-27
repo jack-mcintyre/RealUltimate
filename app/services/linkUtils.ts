@@ -36,6 +36,14 @@ export const STREAM_HOST_ALLOWLIST = [
     'twitch.tv',
 ];
 
+const SOCIAL_HOST_ALLOWLIST: Record<string, string[]> = {
+    x: ['x.com', 'twitter.com'],
+    youtube: ['youtube.com', 'youtu.be'],
+    facebook: ['facebook.com', 'fb.com'],
+    instagram: ['instagram.com'],
+    tiktok: ['tiktok.com'],
+};
+
 export const validateExternalUrl = (
     input: string,
     allowedHosts?: string[]
@@ -66,24 +74,39 @@ export const validateExternalUrl = (
     }
 };
 
-export const isVerifiedSocialLink = (platform: string, input: string): boolean => {
-    const host = getHostname(input);
-    if (!host) return false;
+export const validateSocialExternalUrl = (
+    platform: string,
+    input: string
+): { ok: true; url: string; hostname: string } | { ok: false; error: string } => {
+    if (platform === 'website') {
+        return validateExternalUrl(input);
+    }
 
-    if (platform === 'x') return host.includes('x.com') || host.includes('twitter.com');
-    if (platform === 'youtube') return host.includes('youtube.com') || host.includes('youtu.be');
-    if (platform === 'facebook') return host.includes('facebook.com') || host.includes('fb.com');
-    if (platform === 'instagram') return host.includes('instagram.com');
-    if (platform === 'tiktok') return host.includes('tiktok.com');
-    if (platform === 'website') return !!host;
-    return false;
+    const allowlist = SOCIAL_HOST_ALLOWLIST[platform];
+    if (!allowlist || allowlist.length === 0) {
+        return { ok: false, error: 'Unsupported social platform.' };
+    }
+
+    return validateExternalUrl(input, allowlist);
+};
+
+export const isVerifiedSocialLink = (platform: string, input: string): boolean => {
+    if (platform === 'website') {
+        return validateExternalUrl(input).ok;
+    }
+
+    const host = getHostname(input);
+    const allowlist = SOCIAL_HOST_ALLOWLIST[platform] || [];
+    if (!host || allowlist.length === 0) return false;
+
+    return allowlist.some((allowedHost) => hostMatches(host, allowedHost));
 };
 
 export const isVerifiedMediaLink = (type: 'image' | 'youtube' | 'link', input: string): boolean => {
     const host = getHostname(input);
     if (!host) return false;
 
-    if (type === 'youtube') return host.includes('youtube.com') || host.includes('youtu.be');
-    if (type === 'image') return /\.(jpg|jpeg|png|gif|webp)$/i.test(input) || host.includes('imgur.com') || host.includes('cloudinary.com');
+    if (type === 'youtube') return hostMatches(host, 'youtube.com') || hostMatches(host, 'youtu.be');
+    if (type === 'image') return /\.(jpg|jpeg|png|gif|webp)$/i.test(input) || hostMatches(host, 'imgur.com') || hostMatches(host, 'cloudinary.com');
     return !!host;
 };

@@ -15,6 +15,7 @@ export default function RootLayout() {
         <Stack.Screen name="game/history/[gameId]" options={{ headerShown: false }} />
         <Stack.Screen name="game/scheduled/[teamId]/[gameId]" options={{ headerShown: false }} />
         <Stack.Screen name="team/[teamId]/player/[playerId]" options={{ headerShown: false }} />
+        <Stack.Screen name="tournament/[id]" options={{ headerShown: false }} />
       </Stack>
     </ThemeProvider>
   );

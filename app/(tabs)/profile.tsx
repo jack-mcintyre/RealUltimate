@@ -1,11 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { signOut, updatePassword } from 'firebase/auth';
+import { signOut, updatePassword, updateProfile } from 'firebase/auth';
 import { onValue, ref, update } from 'firebase/database';
 import React, { useEffect, useState } from 'react';
 import { Alert, Image, Linking, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { auth, db } from '../../firebaseConfig';
-import { ensureHttps, getHostname, isHttpUrl, isVerifiedSocialLink } from '../services/linkUtils';
+import ImageCropperModal from '../../src/components/ImageCropperModal';
+import { ensureHttps, isHttpUrl, isVerifiedSocialLink, validateSocialExternalUrl } from '../services/linkUtils';
 import { TeamService } from '../services/TeamService';
 import { SocialLinks, Team, UserPublicProfile } from '../services/types';
 import { getTypography, Layout } from '../theme/DesignSystem';
@@ -26,10 +27,17 @@ export default function ProfileScreen() {
     const [accountModalVisible, setAccountModalVisible] = useState(false);
     const [newPassword, setNewPassword] = useState('');
     const [profileModalVisible, setProfileModalVisible] = useState(false);
+    const [displayName, setDisplayName] = useState('');
     const [profileAvatarUrl, setProfileAvatarUrl] = useState('');
     const [profileBannerUrl, setProfileBannerUrl] = useState('');
     const [profileBio, setProfileBio] = useState('');
     const [profileSocial, setProfileSocial] = useState<SocialLinks>({});
+    const [cropTarget, setCropTarget] = useState<{
+        uri: string;
+        width: number;
+        height: number;
+        target: 'avatar' | 'banner';
+    } | null>(null);
 
     const [themeModalVisible, setThemeModalVisible] = useState(false);
     const { colors, themePref, setThemePref } = useTheme();
@@ -54,6 +62,8 @@ export default function ProfileScreen() {
                 setProfileBannerUrl(nextPublic.bannerUrl || '');
                 setProfileBio(nextPublic.bio || '');
                 setProfileSocial(nextPublic.socialLinks || {});
+                const fallbackName = (user.displayName || user.email?.split('@')[0] || '').trim();
+                setDisplayName((data.displayName || fallbackName).trim());
             }
         });
 
@@ -113,32 +123,28 @@ export default function ProfileScreen() {
         setProfileSocial((prev) => ({ ...prev, [key]: value }));
     };
 
-    const pickImageDataUrl = async (aspect: [number, number]) => {
+    const pickImageForCrop = async (targetType: 'avatar' | 'banner') => {
         const result = await ImagePicker.launchImageLibraryAsync({
             mediaTypes: ['images'],
-            allowsEditing: true,
-            aspect,
-            quality: 0.72,
-            base64: true,
+            allowsEditing: false,
+            quality: 1,
         });
 
-        if (result.canceled || !result.assets?.[0]) return '';
+        if (result.canceled || !result.assets?.[0]) return;
         const asset = result.assets[0];
-        if (!asset.base64) throw new Error('Image data not available.');
+        if (!asset.uri) throw new Error('Image URI not available.');
 
-        const mime = asset.mimeType || 'image/jpeg';
-        const dataUrl = `data:${mime};base64,${asset.base64}`;
-        if (dataUrl.length > MAX_IMAGE_DATA_URL_LENGTH) {
-            throw new Error('Image too large. Choose a smaller image.');
-        }
-
-        return dataUrl;
+        setCropTarget({
+            uri: asset.uri,
+            width: asset.width || 1000,
+            height: asset.height || 1000,
+            target: targetType,
+        });
     };
 
     const handlePickProfileAvatar = async () => {
         try {
-            const next = await pickImageDataUrl([1, 1]);
-            if (next) setProfileAvatarUrl(next);
+            await pickImageForCrop('avatar');
         } catch (error: any) {
             Alert.alert('Image Error', error?.message || 'Could not pick image.');
         }
@@ -146,15 +152,30 @@ export default function ProfileScreen() {
 
     const handlePickProfileBanner = async () => {
         try {
-            const next = await pickImageDataUrl([16, 6]);
-            if (next) setProfileBannerUrl(next);
+            await pickImageForCrop('banner');
         } catch (error: any) {
             Alert.alert('Image Error', error?.message || 'Could not pick image.');
         }
     };
 
+    const handleCropConfirm = (dataUrl: string) => {
+        if (!cropTarget) return;
+        if (cropTarget.target === 'avatar') {
+            setProfileAvatarUrl(dataUrl);
+        } else {
+            setProfileBannerUrl(dataUrl);
+        }
+        setCropTarget(null);
+    };
+
     const handleSavePublicProfile = async () => {
         if (!user) return;
+
+        const normalizedDisplayName = displayName.trim().replace(/\s+/g, ' ');
+        if (normalizedDisplayName.length < 2 || normalizedDisplayName.length > 40) {
+            Alert.alert('Display Name', 'Display name must be 2 to 40 characters.');
+            return;
+        }
 
         const socialEntries = Object.entries(profileSocial)
             .map(([k, v]) => [k, ensureHttps((v || '').trim())] as const)
@@ -183,18 +204,25 @@ export default function ProfileScreen() {
             socialLinks: Object.fromEntries(socialEntries),
         };
 
-        await update(ref(db, `users/${user.uid}/profile`), { publicProfile: nextPublicProfile });
+        await update(ref(db, `users/${user.uid}/profile`), {
+            displayName: normalizedDisplayName,
+            publicProfile: nextPublicProfile,
+        });
+        if (user.displayName !== normalizedDisplayName) {
+            await updateProfile(user, { displayName: normalizedDisplayName });
+        }
         setPublicProfile(nextPublicProfile);
+        setDisplayName(normalizedDisplayName);
         setProfileModalVisible(false);
     };
 
-    const openExternalProfile = async (url: string) => {
-        const normalized = ensureHttps(url || '');
-        if (!normalized || !getHostname(normalized)) {
-            Alert.alert('Invalid URL', 'Please use a valid http or https link.');
+    const openExternalProfile = async (platform: string, url: string) => {
+        const validated = validateSocialExternalUrl(platform, url);
+        if (!validated.ok) {
+            Alert.alert('Invalid URL', validated.error);
             return;
         }
-        await Linking.openURL(normalized);
+        await Linking.openURL(validated.url);
     };
 
     const handleSupportPress = () => {
@@ -238,7 +266,8 @@ export default function ProfileScreen() {
                         )}
                     </View>
 
-                    <Text style={styles.emailText}>{email || 'Loading...'}</Text>
+                    <Text style={styles.displayNameText}>{displayName || email || 'Loading...'}</Text>
+                    <Text style={styles.emailSubText}>{email || ''}</Text>
 
                     {!!publicProfile.bio && (
                         <Text style={styles.profileBioText}>{publicProfile.bio}</Text>
@@ -250,7 +279,7 @@ export default function ProfileScreen() {
                                 <TouchableOpacity
                                     key={`profile-social-${entry.key}`}
                                     style={styles.socialIconBtn}
-                                    onPress={() => openExternalProfile(entry.url)}
+                                    onPress={() => openExternalProfile(entry.key, entry.url)}
                                     activeOpacity={0.8}
                                 >
                                     {entry.key === 'x' ? (
@@ -426,6 +455,18 @@ export default function ProfileScreen() {
                         <Text style={[styles.modalSub, { marginBottom: 20 }]}>Choose images from your device and add your public links.</Text>
 
                         <ScrollView style={{ width: '100%', maxHeight: 420 }} showsVerticalScrollIndicator={false}>
+                            <View style={styles.inputGroup}>
+                                <Text style={styles.inputLabel}>DISPLAY NAME</Text>
+                                <TextInput
+                                    style={styles.inputField}
+                                    placeholder="Your public display name"
+                                    placeholderTextColor={colors.textSecondary}
+                                    value={displayName}
+                                    onChangeText={setDisplayName}
+                                    maxLength={40}
+                                />
+                            </View>
+
                             <View style={styles.inputGroup}> 
                                 <Text style={styles.inputLabel}>PROFILE PICTURE</Text>
                                 <View style={styles.imagePickerRow}>
@@ -514,6 +555,17 @@ export default function ProfileScreen() {
                 </View>
             </Modal>
 
+            <ImageCropperModal
+                visible={!!cropTarget}
+                shape={cropTarget?.target === 'avatar' ? 'circle' : 'banner'}
+                title={cropTarget?.target === 'avatar' ? 'Crop Profile Picture' : 'Crop Banner'}
+                target={cropTarget ? { uri: cropTarget.uri, width: cropTarget.width, height: cropTarget.height } : null}
+                maxDataUrlLength={MAX_IMAGE_DATA_URL_LENGTH}
+                onCancel={() => setCropTarget(null)}
+                onConfirm={handleCropConfirm}
+                onError={(message) => Alert.alert('Image Error', message)}
+            />
+
             {/* APPEARANCE MODAL */}
             <Modal visible={themeModalVisible} animationType="fade" transparent={true} onRequestClose={() => setThemeModalVisible(false)}>
                 <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setThemeModalVisible(false)}>
@@ -564,7 +616,7 @@ const getStyles = (colors: ThemeColors) => {
         header: { alignItems: 'center', marginBottom: 32 },
         profileBannerWrap: {
             width: '100%',
-            height: 120,
+            aspectRatio: 16 / 6,
             borderRadius: Layout.radiusMd,
             overflow: 'hidden',
             borderWidth: 1,
@@ -580,20 +632,21 @@ const getStyles = (colors: ThemeColors) => {
         },
         profileBannerFallbackText: { ...Typography.bodySmall, color: colors.primary, fontWeight: '700', letterSpacing: 1 },
         avatarOverlay: {
-            marginTop: -44,
+            marginTop: -48,
             marginBottom: 2,
-            width: 84,
-            height: 84,
-            borderWidth: 2,
+            width: 96,
+            height: 96,
+            borderWidth: 3,
             borderColor: colors.surface,
-            borderRadius: 42,
+            borderRadius: 48,
             overflow: 'hidden',
             alignItems: 'center',
             justifyContent: 'center',
         },
-        avatarImage: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.surfaceSecondary },
-        avatarCircle: { width: 80, height: 80, borderRadius: 40, backgroundColor: colors.primaryLight, justifyContent: 'center', alignItems: 'center' },
-        emailText: { ...Typography.title, fontSize: 20, marginBottom: 6, textAlign: 'center' },
+        avatarImage: { width: '100%', height: '100%', backgroundColor: colors.surfaceSecondary },
+        avatarCircle: { width: '100%', height: '100%', backgroundColor: colors.primaryLight, justifyContent: 'center', alignItems: 'center' },
+        displayNameText: { ...Typography.title, fontSize: 22, marginBottom: 2, textAlign: 'center' },
+        emailSubText: { ...Typography.bodySmall, color: colors.textSecondary, marginBottom: 6, textAlign: 'center' },
         profileBioText: { ...Typography.bodySmall, color: colors.textSecondary, textAlign: 'center', marginBottom: 8 },
         socialIconRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
         socialIconBtn: {
@@ -691,8 +744,25 @@ const getStyles = (colors: ThemeColors) => {
             paddingVertical: 10,
         },
         imageClearBtnText: { ...Typography.bodySmall, color: colors.textSecondary, fontWeight: '700' },
-        profileAvatarPreview: { width: 86, height: 86, borderRadius: 43, backgroundColor: colors.surfaceSecondary, marginTop: 10, alignSelf: 'center' },
-        profileBannerPreview: { width: '100%', height: 110, borderRadius: Layout.radiusSm, backgroundColor: colors.surfaceSecondary, marginTop: 10 },
+        profileAvatarPreview: {
+            width: 92,
+            height: 92,
+            borderRadius: 46,
+            backgroundColor: colors.surfaceSecondary,
+            marginTop: 10,
+            alignSelf: 'center',
+            borderWidth: 1,
+            borderColor: colors.border,
+        },
+        profileBannerPreview: {
+            width: '100%',
+            aspectRatio: 16 / 6,
+            borderRadius: Layout.radiusSm,
+            backgroundColor: colors.surfaceSecondary,
+            marginTop: 10,
+            borderWidth: 1,
+            borderColor: colors.border,
+        },
         linkHintText: { ...Typography.bodySmall, color: colors.textSecondary, marginTop: 6 },
     });
 }

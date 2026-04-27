@@ -49,15 +49,10 @@ export default function LoginScreen() {
       }
     });
     return unsubscribe;
-  }, []);
+  }, [fadeAnim, slideAnim, spinAnim]);
 
   const setError = (message: string) => {
     setStatusType('error');
-    setStatusMsg(message);
-  };
-
-  const setSuccess = (message: string) => {
-    setStatusType('success');
     setStatusMsg(message);
   };
 

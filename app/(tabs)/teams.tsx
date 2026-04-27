@@ -148,7 +148,7 @@ export default function TeamsHubScreen() {
             const idsToFetch = Array.from(new Set(
                 liveTeams
                     .map((team) => team.activeGameId)
-                    .filter((id): id is string => !!id && !liveGameDetails[id])
+                    .filter((id): id is string => !!id)
             ));
 
             const fetchedGames = await Promise.all(
@@ -197,7 +197,8 @@ export default function TeamsHubScreen() {
         if (!teamNameInput.trim() || !user) return;
         setIsLoading(true);
         try {
-            await TeamService.createTeam(teamNameInput, user.uid, user.email || 'Unknown');
+            const displayName = (user.displayName || user.email?.split('@')[0] || '').trim();
+            await TeamService.createTeam(teamNameInput, user.uid, user.email || 'Unknown', displayName);
             setTeamNameInput('');
             setTeamMode('none');
         } catch {
@@ -211,7 +212,8 @@ export default function TeamsHubScreen() {
         if (!accessCodeInput.trim() || !user) return;
         setIsLoading(true);
         try {
-            const result = await TeamService.joinTeamByCode(accessCodeInput.toUpperCase(), user.uid, user.email || 'Unknown');
+            const displayName = (user.displayName || user.email?.split('@')[0] || '').trim();
+            const result = await TeamService.joinTeamByCode(accessCodeInput.toUpperCase(), user.uid, user.email || 'Unknown', displayName);
             if (result) {
                 setAccessCodeInput('');
                 setTeamMode('none');
