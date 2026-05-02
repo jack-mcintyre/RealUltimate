@@ -1,4 +1,4 @@
-import { get, onValue, push, ref, set } from 'firebase/database';
+import { get, onValue, push, ref, set, runTransaction } from 'firebase/database';
 import { db } from '../../firebaseConfig';
 import { isFutureScheduledTimestamp, sanitizeAvailability, SCHEDULE_LIMITS } from './scheduleValidation';
 import { Player, ScheduledGame, Team, TeamJoinCodes, TeamPageConfig } from './types';
@@ -154,6 +154,52 @@ export const TeamService = {
         });
         
         return results.slice(0, 10);
+    },
+
+    searchPublicTeams: async (queryText: string): Promise<Team[]> => {
+        if (!queryText || queryText.length < 2) return [];
+        const normalized = queryText.toLowerCase().trim();
+        const teamsRef = ref(db, 'teams');
+        const snapshot = await get(teamsRef);
+        if (!snapshot.exists()) return [];
+        
+        const data = snapshot.val();
+        const results: Team[] = [];
+        
+        Object.entries(data).forEach(([id, team]: [string, any]) => {
+            // Include teams unless they are explicitly set to private
+            if (team.pageConfig?.settings?.isPublic !== false) {
+                if (team.name && team.name.toLowerCase().includes(normalized)) {
+                    results.push({ ...team, id });
+                }
+            }
+        });
+        
+        return results.slice(0, 10);
+    },
+
+    followTeam: async (teamId: string, userId: string) => {
+        await set(ref(db, `users/${userId}/spectated_teams/${teamId}`), true);
+        const teamRef = ref(db, `teams/${teamId}/fanCount`);
+        await runTransaction(teamRef, (currentCount) => {
+            return (currentCount || 0) + 1;
+        });
+    },
+
+    unfollowTeam: async (teamId: string, userId: string) => {
+        await set(ref(db, `users/${userId}/spectated_teams/${teamId}`), null);
+        const teamRef = ref(db, `teams/${teamId}/fanCount`);
+        await runTransaction(teamRef, (currentCount) => {
+            const next = (currentCount || 0) - 1;
+            return next < 0 ? 0 : next;
+        });
+    },
+
+    subscribeToSpectatorStatus: (teamId: string, userId: string, callback: (isSpectator: boolean) => void) => {
+        const specRef = ref(db, `users/${userId}/spectated_teams/${teamId}`);
+        return onValue(specRef, (snapshot) => {
+            callback(!!snapshot.val());
+        });
     },
 
     lookupTeamByAccessCode: async (accessCode: string): Promise<Team | null> => {

@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, TextInput, Alert, ScrollView, Platform } from 'react-native';
-import { useLocalSearchParams, router } from 'expo-router';
+import { useLocalSearchParams, router, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import * as ImagePicker from 'expo-image-picker';
+import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { storage } from '../../../firebaseConfig';
 
 import { TournamentService } from '../../services/TournamentService';
 import { Tournament } from '../../services/types';
@@ -21,6 +24,17 @@ export default function TournamentSettingsScreen() {
     const [endDate, setEndDate] = useState(new Date());
     const [enrollmentDeadline, setEnrollmentDeadline] = useState(new Date());
 
+    const [bio, setBio] = useState('');
+    const [announcements, setAnnouncements] = useState('');
+    const [logoUrl, setLogoUrl] = useState('');
+    const [bannerUrl, setBannerUrl] = useState('');
+
+    const [tiebreakerLogic, setTiebreakerLogic] = useState<'head_to_head' | 'point_diff'>('head_to_head');
+    const [hardCapScore, setHardCapScore] = useState('');
+    const [softCapTimeMinutes, setSoftCapTimeMinutes] = useState('');
+    const [timeoutsPerHalf, setTimeoutsPerHalf] = useState('');
+    const [liveScorePublic, setLiveScorePublic] = useState(true);
+
     const [showStartDatePicker, setShowStartDatePicker] = useState(false);
     const [showEndDatePicker, setShowEndDatePicker] = useState(false);
     const [showEnrollmentDatePicker, setShowEnrollmentDatePicker] = useState(false);
@@ -35,12 +49,61 @@ export default function TournamentSettingsScreen() {
                 if (data.startDate) setStartDate(new Date(data.startDate));
                 if (data.endDate) setEndDate(new Date(data.endDate));
                 if (data.enrollmentDeadline) setEnrollmentDeadline(new Date(data.enrollmentDeadline));
+                setBio(data.bio || '');
+                setAnnouncements(data.announcements || '');
+                setLogoUrl(data.logoUrl || '');
+                setBannerUrl(data.bannerUrl || '');
+                setTiebreakerLogic(data.tiebreakerLogic || 'head_to_head');
+                setHardCapScore(data.hardCapScore ? String(data.hardCapScore) : '');
+                setSoftCapTimeMinutes(data.softCapTimeMinutes ? String(data.softCapTimeMinutes) : '');
+                setTimeoutsPerHalf(data.timeoutsPerHalf ? String(data.timeoutsPerHalf) : '');
+                setLiveScorePublic(data.liveScorePublic ?? true);
             } else if (data) {
                 setTournament(data);
             }
         });
         return () => unsubscribe();
     }, [id]);
+
+    const handleImagePick = async (type: 'logo' | 'banner') => {
+        try {
+            // Request permission first
+            const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+            if (status !== 'granted') {
+                Alert.alert('Permission Denied', 'We need access to your photo library to upload images.');
+                return;
+            }
+
+            const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: 'images',
+                allowsEditing: true,
+                aspect: type === 'logo' ? [1, 1] : [16, 9],
+                quality: 0.7,
+            });
+
+            if (!result.canceled && result.assets[0]?.uri) {
+                const uri = result.assets[0].uri;
+                
+                const response = await fetch(uri);
+                const blob = await response.blob();
+                const filename = `${tournament?.id}_${type}_${Date.now()}.jpg`;
+                const sRef = storageRef(storage, `tournaments/${filename}`);
+                
+                await uploadBytes(sRef, blob);
+                const downloadUrl = await getDownloadURL(sRef);
+                
+                if (type === 'logo') {
+                    setLogoUrl(downloadUrl);
+                } else {
+                    setBannerUrl(downloadUrl);
+                }
+                Alert.alert('Success', `${type === 'logo' ? 'Logo' : 'Banner'} uploaded! Tap Save to apply.`);
+            }
+        } catch (error: any) {
+            console.error('Image upload error:', error);
+            Alert.alert('Upload Failed', error.message || 'Could not upload image. Check Firebase Storage rules or try again.');
+        }
+    };
 
     const handleSave = async () => {
         if (!tournament) return;
@@ -51,6 +114,15 @@ export default function TournamentSettingsScreen() {
                 startDate: startDate.toISOString().split('T')[0],
                 endDate: endDate.toISOString().split('T')[0],
                 enrollmentDeadline: enrollmentDeadline.toISOString().split('T')[0],
+                bio,
+                announcements,
+                logoUrl,
+                bannerUrl,
+                tiebreakerLogic,
+                hardCapScore: hardCapScore ? Number(hardCapScore) : undefined,
+                softCapTimeMinutes: softCapTimeMinutes ? Number(softCapTimeMinutes) : undefined,
+                timeoutsPerHalf: timeoutsPerHalf ? Number(timeoutsPerHalf) : undefined,
+                liveScorePublic,
             });
             router.back();
         } catch (error: any) {
@@ -119,6 +191,7 @@ export default function TournamentSettingsScreen() {
 
     return (
         <View style={styles.container}>
+            <Stack.Screen options={{ headerShown: false }} />
             <View style={styles.header}>
                 <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
                     <Ionicons name="chevron-back" size={24} color={colors.text} />
@@ -148,6 +221,123 @@ export default function TournamentSettingsScreen() {
                             value={hostName} 
                             onChangeText={setHostName} 
                         />
+                    </View>
+                </View>
+
+                <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>Details</Text>
+                    <View style={styles.inputRow}>
+                        <Text style={styles.label}>Bio / Description</Text>
+                        <TextInput 
+                            style={[styles.input, { minHeight: 80 }]} 
+                            multiline
+                            textAlignVertical="top"
+                            placeholder="Brief description of the tournament..." 
+                            placeholderTextColor={colors.textSecondary} 
+                            value={bio} 
+                            onChangeText={setBio} 
+                        />
+                    </View>
+                    <View style={styles.inputRow}>
+                        <Text style={styles.label}>Announcements</Text>
+                        <TextInput 
+                            style={[styles.input, { minHeight: 80 }]} 
+                            multiline
+                            textAlignVertical="top"
+                            placeholder="Important updates for teams and spectators..." 
+                            placeholderTextColor={colors.textSecondary} 
+                            value={announcements} 
+                            onChangeText={setAnnouncements} 
+                        />
+                    </View>
+                </View>
+
+                <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>Branding Images</Text>
+                    <View style={styles.inputRow}>
+                        <Text style={styles.label}>Logo</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                            {logoUrl ? <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: colors.surfaceSecondary, overflow: 'hidden' }}><Text style={{ color: colors.textSecondary, textAlign: 'center', lineHeight: 40, fontSize: 10 }}>IMG</Text></View> : null}
+                            <TouchableOpacity style={styles.uploadBtn} onPress={() => handleImagePick('logo')}>
+                                <Text style={styles.uploadBtnText}>{logoUrl ? 'Change Logo' : 'Upload Logo'}</Text>
+                            </TouchableOpacity>
+                            {logoUrl ? (
+                                <TouchableOpacity onPress={() => setLogoUrl('')} style={{ padding: 8 }}>
+                                    <Ionicons name="trash-outline" size={20} color="#FF3B30" />
+                                </TouchableOpacity>
+                            ) : null}
+                        </View>
+                    </View>
+                    <View style={styles.inputRow}>
+                        <Text style={styles.label}>Banner</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                            {bannerUrl ? <View style={{ width: 60, height: 34, borderRadius: 4, backgroundColor: colors.surfaceSecondary, overflow: 'hidden' }}><Text style={{ color: colors.textSecondary, textAlign: 'center', lineHeight: 34, fontSize: 10 }}>IMG</Text></View> : null}
+                            <TouchableOpacity style={styles.uploadBtn} onPress={() => handleImagePick('banner')}>
+                                <Text style={styles.uploadBtnText}>{bannerUrl ? 'Change Banner' : 'Upload Banner'}</Text>
+                            </TouchableOpacity>
+                            {bannerUrl ? (
+                                <TouchableOpacity onPress={() => setBannerUrl('')} style={{ padding: 8 }}>
+                                    <Ionicons name="trash-outline" size={20} color="#FF3B30" />
+                                </TouchableOpacity>
+                            ) : null}
+                        </View>
+                    </View>
+                </View>
+
+                <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>Rules & Game Settings</Text>
+                    <View style={styles.inputRow}>
+                        <Text style={styles.label}>Tiebreaker Logic</Text>
+                        <View style={{ flexDirection: 'row', borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: colors.border }}>
+                            <TouchableOpacity style={{ flex: 1, paddingVertical: 10, backgroundColor: tiebreakerLogic === 'head_to_head' ? colors.primary : colors.surfaceSecondary, alignItems: 'center' }} onPress={() => setTiebreakerLogic('head_to_head')}>
+                                <Text style={{ fontSize: 13, fontWeight: '700', color: tiebreakerLogic === 'head_to_head' ? '#FFF' : colors.textSecondary }}>Head-to-Head</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={{ flex: 1, paddingVertical: 10, backgroundColor: tiebreakerLogic === 'point_diff' ? colors.primary : colors.surfaceSecondary, alignItems: 'center' }} onPress={() => setTiebreakerLogic('point_diff')}>
+                                <Text style={{ fontSize: 13, fontWeight: '700', color: tiebreakerLogic === 'point_diff' ? '#FFF' : colors.textSecondary }}>Point Differential</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                    <View style={styles.inputRow}>
+                        <Text style={styles.label}>Hard Cap Score</Text>
+                        <TextInput 
+                            style={styles.input} 
+                            placeholder="15"
+                            keyboardType="number-pad" 
+                            placeholderTextColor={colors.textSecondary} 
+                            value={hardCapScore} 
+                            onChangeText={setHardCapScore} 
+                        />
+                    </View>
+                    <View style={styles.inputRow}>
+                        <Text style={styles.label}>Soft Cap Time (Minutes)</Text>
+                        <TextInput 
+                            style={styles.input} 
+                            placeholder="90"
+                            keyboardType="number-pad" 
+                            placeholderTextColor={colors.textSecondary} 
+                            value={softCapTimeMinutes} 
+                            onChangeText={setSoftCapTimeMinutes} 
+                        />
+                    </View>
+                    <View style={styles.inputRow}>
+                        <Text style={styles.label}>Timeouts Per Half</Text>
+                        <TextInput 
+                            style={styles.input} 
+                            placeholder="2"
+                            keyboardType="number-pad" 
+                            placeholderTextColor={colors.textSecondary} 
+                            value={timeoutsPerHalf} 
+                            onChangeText={setTimeoutsPerHalf} 
+                        />
+                    </View>
+                    <View style={styles.inputRow}>
+                        <Text style={styles.label}>Public Live Scores</Text>
+                        <TouchableOpacity 
+                            style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 14, borderRadius: 8, borderWidth: 1, borderColor: liveScorePublic ? colors.primary : colors.border, backgroundColor: liveScorePublic ? colors.primary : colors.surfaceSecondary }}
+                            onPress={() => setLiveScorePublic(!liveScorePublic)}
+                        >
+                            <Text style={{ fontSize: 13, fontWeight: '700', color: liveScorePublic ? '#FFF' : colors.textSecondary }}>{liveScorePublic ? 'Visible to Spectators' : 'Hidden Until Verified'}</Text>
+                        </TouchableOpacity>
                     </View>
                 </View>
 

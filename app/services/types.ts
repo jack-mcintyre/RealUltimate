@@ -65,6 +65,9 @@ export interface TeamPageSettings {
   isPublic: boolean;
   advancedStatsPublic: boolean;
   mediaPublic: boolean;
+  showCoachCode?: boolean;
+  showFanCode?: boolean;
+  showFanCount?: boolean;
 }
 
 export interface TeamThemeConfig {
@@ -103,6 +106,7 @@ export interface Team {
   role?: 'coach' | 'spectator'; // Client-side only - indicates user's relation
   activeGameId?: string; // Tethers a running game session to this team
   pageConfig?: TeamPageConfig;
+  fanCount?: number;
 }
 
 export interface TeamJoinCodes {
@@ -130,7 +134,8 @@ export type TournamentEnrollmentMode = 'manual' | 'open';
 export type TournamentEngine = 'single_elim' | 'pool_to_bracket';
 export type TournamentSeeding = 'manual' | 'rating' | 'random';
 export type TournamentStatus = 'draft' | 'active' | 'completed';
-export type TournamentStage = 'pool' | 'championship' | 'consolation';
+export type TournamentStage = 'pool' | 'crossover' | 'championship' | 'consolation';
+export type TournamentMatchStatus = 'upcoming' | 'in_progress' | 'final' | 'cancelled';
 
 export interface TournamentParticipant {
   id: string;
@@ -148,6 +153,7 @@ export interface TournamentStanding {
   pointsAgainst: number;
   pointDiff: number;
   rank: number;
+  pool?: string; // which pool this standing belongs to
 }
 
 export interface TournamentMatch {
@@ -166,6 +172,19 @@ export interface TournamentMatch {
   consolationNextMatchId?: string;
   consolationNextSlot?: 'A' | 'B';
   scheduledTime?: string;
+  fieldName?: string;
+  matchStatus?: TournamentMatchStatus;
+  day?: number; // 1, 2, 3 for multi-day
+  linkedGameId?: string; // Links to a RealUltimate game for live stat tracking
+  linkedGameIdB?: string; // Team B's independent game recording
+  captainCheckIn?: { teamA?: boolean; teamB?: boolean };
+}
+
+export interface TournamentActivityEntry {
+  id: string;
+  message: string;
+  timestamp: number;
+  type: 'score' | 'schedule' | 'system' | 'announcement';
 }
 
 export interface TournamentSpiritScore {
@@ -204,6 +223,40 @@ export interface Tournament {
   matches: Record<string, TournamentMatch>;
   standings?: Record<string, TournamentStanding>;
   spiritScores?: Record<string, TournamentSpiritScore>;
+  bio?: string;
+  announcements?: string;
+  announcementFeed?: { id: string; message: string; timestamp: number }[];
+  logoUrl?: string;
+  bannerUrl?: string;
+  manualPoolAssignments?: Record<string, string>; // participantId -> pool key (e.g. 'A')
+  poolCount?: number;
+
+  // Advanced Customization
+  tiebreakerLogic?: 'head_to_head' | 'point_diff';
+  hardCapScore?: number;
+  softCapTimeMinutes?: number;
+  timeoutsPerHalf?: number;
+  liveScorePublic?: boolean;
+
+  // Pool Configuration
+  poolSize?: number; // teams per pool (3, 4, 5)
+  qualifiersPerPool?: number; // how many advance from each pool
+  poolFormat?: 'round_robin' | 'partial';
+
+  // Bracket Configuration
+  bracketFormat?: 'single_elim' | 'double_elim';
+  includeThirdPlace?: boolean;
+  crossoverEnabled?: boolean;
+
+  // Schedule
+  scheduleDays?: number; // 1, 2, 3
+  scheduleHold?: { active: boolean; reason?: string; since?: number };
+
+  // Activity Log
+  activityLog?: TournamentActivityEntry[];
+
+  // Templates
+  templateId?: string;
 }
 
 export type EventType =

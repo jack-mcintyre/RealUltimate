@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { Alert, Image, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Alert, Image, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { auth } from '../../firebaseConfig';
 import { GameService } from '../services/GameService';
 import { ensureHttps, getHostname, validateSocialExternalUrl } from '../services/linkUtils';
@@ -84,6 +84,9 @@ export default function TeamDashboardScreen() {
     const [pastGames, setPastGames] = useState<GameState[]>([]);
     const [scheduledGames, setScheduledGames] = useState<ScheduledGame[]>([]);
     const [joinCodes, setJoinCodes] = useState<TeamJoinCodes | null>(null);
+    const [isSpectator, setIsSpectator] = useState(false);
+    const [hideToastTimeoutRef, setHideToastTimeoutRef] = useState<ReturnType<typeof setTimeout> | null>(null);
+    const [showCopiedToast, setShowCopiedToast] = useState(false);
 
     // Player Input
     const [playerName, setPlayerName] = useState('');
@@ -131,6 +134,13 @@ export default function TeamDashboardScreen() {
             unsubscribeScheduled();
         };
     }, [id]);
+
+    useEffect(() => {
+        if (!id || !currentUserId) return;
+        return TeamService.subscribeToSpectatorStatus(id, currentUserId, (status) => {
+            setIsSpectator(status);
+        });
+    }, [id, currentUserId]);
 
     useEffect(() => {
         if (!id || !team || preview === 'public') {
@@ -240,6 +250,20 @@ export default function TeamDashboardScreen() {
         await Linking.openURL(normalized);
     };
 
+    const handleShareTeam = async () => {
+        if (!team) return;
+        const fanCode = joinCodes?.spectator || team.spectatorCode;
+        const message = fanCode 
+            ? `Check out my ultimate frisbee team on RealUltimate! Download the app and enter the Fan Code ${fanCode} to follow us!`
+            : `Check out my ultimate frisbee team on RealUltimate! Search for "${team.name}" in the app to follow us!`;
+            
+        try {
+            await Share.share({ message });
+        } catch (error) {
+            console.error("Error sharing", error);
+        }
+    };
+
     const handleOpenSocialExternal = async (platform: keyof SocialLinks, url: string) => {
         const validated = validateSocialExternalUrl(platform, url);
         if (!validated.ok) {
@@ -247,6 +271,28 @@ export default function TeamDashboardScreen() {
             return;
         }
         await Linking.openURL(validated.url);
+    };
+
+    const handleFollowToggle = async () => {
+        if (!team || !currentUserId) return;
+        try {
+            if (isSpectator) {
+                await TeamService.unfollowTeam(team.id, currentUserId);
+            } else {
+                await TeamService.followTeam(team.id, currentUserId);
+            }
+        } catch {
+            Alert.alert("Error", "Could not update follow status.");
+        }
+    };
+
+    const copyToClipboard = async (text: string) => {
+        const Clipboard = require('expo-clipboard');
+        await Clipboard.setStringAsync(text);
+        if (hideToastTimeoutRef) clearTimeout(hideToastTimeoutRef);
+        setShowCopiedToast(true);
+        const timeout = setTimeout(() => setShowCopiedToast(false), 2000);
+        setHideToastTimeoutRef(timeout);
     };
 
     const handleScheduleAvailability = (playerId: string, value: ScheduledAvailabilityStatus) => {
@@ -290,6 +336,9 @@ export default function TeamDashboardScreen() {
         isPublic: pageConfig.settings?.isPublic ?? true,
         advancedStatsPublic: pageConfig.settings?.advancedStatsPublic ?? true,
         mediaPublic: pageConfig.settings?.mediaPublic ?? true,
+        showCoachCode: pageConfig.settings?.showCoachCode ?? false,
+        showFanCode: pageConfig.settings?.showFanCode ?? false,
+        showFanCount: pageConfig.settings?.showFanCount ?? true,
     };
     const canSeeAdvancedStats = pageSettings.advancedStatsPublic || canEditTeamPage;
     const canSeeMedia = pageSettings.mediaPublic || canEditTeamPage;
@@ -559,17 +608,26 @@ export default function TeamDashboardScreen() {
                     <Ionicons name="arrow-back" size={24} color={colors.text} />
                 </TouchableOpacity>
                 <Text style={styles.topAppBarTitle} numberOfLines={1}>{team.name}</Text>
-                {canEditTeamPage ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                     <TouchableOpacity
                         style={[styles.topEditBtn, { borderColor: teamAccent, backgroundColor: teamAccentBg }]}
-                        onPress={() => router.push(`/team/${team.id}/edit` as any)}
+                        onPress={handleShareTeam}
                         activeOpacity={0.8}
                     >
-                        <Ionicons name="create-outline" size={18} color={teamAccent} />
+                        <Ionicons name="share-outline" size={18} color={teamAccent} />
                     </TouchableOpacity>
-                ) : (
-                    <View style={{ width: 40 }} />
-                )}
+                    {canEditTeamPage ? (
+                        <TouchableOpacity
+                            style={[styles.topEditBtn, { borderColor: teamAccent, backgroundColor: teamAccentBg }]}
+                            onPress={() => router.push(`/team/${team.id}/edit` as any)}
+                            activeOpacity={0.8}
+                        >
+                            <Ionicons name="create-outline" size={18} color={teamAccent} />
+                        </TouchableOpacity>
+                    ) : (
+                        <View style={{ width: 40 }} />
+                    )}
+                </View>
             </View>
 
             {isPreviewPublic && (
@@ -603,7 +661,42 @@ export default function TeamDashboardScreen() {
                         )}
                     </View>
 
-                    <Text style={[styles.teamNameTitle, { color: teamAccent }]}>{team.name}</Text>
+                    <Text style={[styles.teamNameTitle, { color: teamAccent, marginBottom: 4 }]}>{team.name}</Text>
+                    
+                    {pageSettings.showFanCount && (
+                        <Text style={{ ...getTypography(colors).bodySmall, color: colors.textSecondary, marginBottom: 8 }}>
+                            <Ionicons name="people" size={14} color={colors.textSecondary} /> {team.fanCount || 0} Followers
+                        </Text>
+                    )}
+
+                    {!canEditTeamPage && currentUserId && (
+                        <TouchableOpacity
+                            style={{ paddingVertical: 10, paddingHorizontal: 24, borderRadius: Layout.radiusMd, marginTop: 4, marginBottom: 12, backgroundColor: isSpectator ? colors.surfaceSecondary : teamAccent, borderWidth: 1, borderColor: isSpectator ? colors.border : teamAccent }}
+                            onPress={handleFollowToggle}
+                            activeOpacity={0.8}
+                        >
+                            <Text style={{ ...getTypography(colors).button, color: isSpectator ? colors.text : colors.onPrimary }}>
+                                {isSpectator ? 'Following' : 'Follow Team'}
+                            </Text>
+                        </TouchableOpacity>
+                    )}
+
+                    {((canEditTeamPage && pageSettings.showCoachCode) || pageSettings.showFanCode) && (
+                        <View style={{ flexDirection: 'row', gap: 12, marginBottom: 16 }}>
+                            {canEditTeamPage && pageSettings.showCoachCode && (
+                                <TouchableOpacity style={{ backgroundColor: colors.surfaceSecondary, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: colors.border, alignItems: 'center' }} onPress={() => { const code = joinCodes?.coach || team.accessCode; if (code) copyToClipboard(code); }} activeOpacity={0.7}>
+                                    <Text style={{ fontSize: 10, color: colors.textSecondary, marginBottom: 2, fontWeight: '700' }}>COACH CODE</Text>
+                                    <Text style={{ fontSize: 14, fontWeight: '800', letterSpacing: 1, color: teamAccent }}>{joinCodes?.coach || team.accessCode || 'N/A'}</Text>
+                                </TouchableOpacity>
+                            )}
+                            {pageSettings.showFanCode && (
+                                <TouchableOpacity style={{ backgroundColor: colors.surfaceSecondary, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: colors.border, alignItems: 'center' }} onPress={() => { const code = joinCodes?.spectator || team.spectatorCode; if (code) copyToClipboard(code); }} activeOpacity={0.7}>
+                                    <Text style={{ fontSize: 10, color: colors.textSecondary, marginBottom: 2, fontWeight: '700' }}>FAN CODE</Text>
+                                    <Text style={{ fontSize: 14, fontWeight: '800', letterSpacing: 1, color: teamAccent }}>{joinCodes?.spectator || team.spectatorCode || 'N/A'}</Text>
+                                </TouchableOpacity>
+                            )}
+                        </View>
+                    )}
 
                     {!!teamBio && <Text style={styles.teamBioText}>{teamBio}</Text>}
 
@@ -652,18 +745,7 @@ export default function TeamDashboardScreen() {
                         </View>
                     )}
                     
-                    {canEditTeamPage && (
-                        <View style={styles.codeContainerRow}>
-                            <View style={[styles.codeBadge, { borderColor: teamAccentSoft }]}>
-                                <Text style={styles.codeBadgeLabel}>COACH CODE</Text>
-                                <Text style={styles.codeBadgeCode}>{joinCodes?.coach || 'Unavailable'}</Text>
-                            </View>
-                            <View style={[styles.codeBadge, { borderColor: teamAccentSoft }]}>
-                                <Text style={styles.codeBadgeLabel}>FAN CODE</Text>
-                                <Text style={styles.codeBadgeCode}>{joinCodes?.spectator || 'Unavailable'}</Text>
-                            </View>
-                        </View>
-                    )}
+
                 </View>
 
                 {/* ACTION BUTTONS */}
@@ -1089,11 +1171,8 @@ export default function TeamDashboardScreen() {
                         <View style={styles.addPermissionBox}>
                             <Text style={styles.inputLabel}>ADD TEAM MANAGER</Text>
                             <Text style={{ ...getTypography(colors).bodySmall, color: colors.textSecondary, marginBottom: 12 }}>
-                                To allow another user to record games and manage the roster, have them download the app and enter this code on the Teams Hub.
+                                To allow another user to record games and manage the roster, have them download the app and enter the Coach Code (found in Team Settings) on the Teams Hub.
                             </Text>
-                            <View style={{ backgroundColor: colors.surfaceSecondary, padding: 16, borderRadius: Layout.radiusMd, alignItems: 'center' }}>
-                                <Text style={{ ...getTypography(colors).title, fontSize: 24, letterSpacing: 4 }}>{team.accessCode}</Text>
-                            </View>
                         </View>
                     </View>
                 </View>
@@ -1211,6 +1290,14 @@ export default function TeamDashboardScreen() {
                     </View>
                 </View>
             </Modal>
+
+            {showCopiedToast && (
+                <View pointerEvents="none" style={{ position: 'absolute', bottom: 20, alignSelf: 'center', backgroundColor: '#16A34A', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 6, zIndex: 999 }}>
+                    <Ionicons name="checkmark-circle" size={16} color="#ffffff" />
+                    <Text style={{ color: '#fff', fontWeight: '800', fontSize: 12 }}>Copied to clipboard!</Text>
+                </View>
+            )}
+
         </KeyboardAvoidingView>
     );
 }

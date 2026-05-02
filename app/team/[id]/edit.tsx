@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -7,7 +8,7 @@ import { auth } from '../../../firebaseConfig';
 import ImageCropperModal from '../../../src/components/ImageCropperModal';
 import { ensureHttps, isHttpUrl, isVerifiedMediaLink, isVerifiedSocialLink } from '../../services/linkUtils';
 import { TeamService } from '../../services/TeamService';
-import { SocialLinks, Team, TeamMediaItem, TeamPageConfig } from '../../services/types';
+import { SocialLinks, Team, TeamJoinCodes, TeamMediaItem, TeamPageConfig } from '../../services/types';
 import { getTypography, Layout } from '../../theme/DesignSystem';
 import { ThemeColors, useTheme } from '../../theme/ThemeContext';
 
@@ -22,6 +23,7 @@ export default function TeamEditPageScreen() {
     const styles = getStyles(colors);
 
     const [team, setTeam] = useState<Team | null>(null);
+    const [joinCodes, setJoinCodes] = useState<TeamJoinCodes | null>(null);
     const [isHydrated, setIsHydrated] = useState(false);
 
     const [avatarUrl, setAvatarUrl] = useState('');
@@ -32,6 +34,9 @@ export default function TeamEditPageScreen() {
     const [isPublic, setIsPublic] = useState(true);
     const [advancedStatsPublic, setAdvancedStatsPublic] = useState(true);
     const [mediaPublic, setMediaPublic] = useState(true);
+    const [showCoachCode, setShowCoachCode] = useState(false);
+    const [showFanCode, setShowFanCode] = useState(false);
+    const [showFanCount, setShowFanCount] = useState(true);
 
     const [socialLinks, setSocialLinks] = useState<SocialLinks>({});
     const [mediaItems, setMediaItems] = useState<TeamMediaItem[]>([]);
@@ -56,7 +61,12 @@ export default function TeamEditPageScreen() {
 
     useEffect(() => {
         if (!id) return;
-        return TeamService.subscribeToTeam(id, (nextTeam) => setTeam(nextTeam));
+        const unsubTeam = TeamService.subscribeToTeam(id, (nextTeam) => setTeam(nextTeam));
+        const unsubCodes = TeamService.subscribeToTeamJoinCodes(id, (codes) => setJoinCodes(codes));
+        return () => {
+            unsubTeam();
+            unsubCodes();
+        };
     }, [id]);
 
     useEffect(() => {
@@ -78,6 +88,9 @@ export default function TeamEditPageScreen() {
         setIsPublic(settings.isPublic ?? true);
         setAdvancedStatsPublic(settings.advancedStatsPublic ?? true);
         setMediaPublic(settings.mediaPublic ?? true);
+        setShowCoachCode(settings.showCoachCode ?? false);
+        setShowFanCode(settings.showFanCode ?? false);
+        setShowFanCount(settings.showFanCount ?? true);
 
         setSocialLinks({ ...(pageConfig.socialLinks || {}) });
         setMediaItems([...(pageConfig.media || [])]);
@@ -245,6 +258,9 @@ export default function TeamEditPageScreen() {
                     isPublic,
                     advancedStatsPublic,
                     mediaPublic,
+                    showCoachCode,
+                    showFanCode,
+                    showFanCount,
                 },
                 socialLinks: Object.fromEntries(socialEntries),
                 media: cleanMedia,
@@ -274,6 +290,16 @@ export default function TeamEditPageScreen() {
         } finally {
             setIsSaving(false);
         }
+    };
+
+    const copyToClipboard = async (text: string) => {
+        await Clipboard.setStringAsync(text);
+        if (hideToastTimeoutRef.current) clearTimeout(hideToastTimeoutRef.current);
+        setShowSavedToast(true);
+        hideToastTimeoutRef.current = setTimeout(() => {
+            setShowSavedToast(false);
+            hideToastTimeoutRef.current = null;
+        }, 2200);
     };
 
     const handlePreviewPublic = () => {
@@ -380,6 +406,43 @@ export default function TeamEditPageScreen() {
                             <Text style={styles.toggleSub}>Show or hide linked media content for non-coaches.</Text>
                         </View>
                         <Switch value={mediaPublic} onValueChange={setMediaPublic} thumbColor={colors.onPrimary} trackColor={{ false: colors.border, true: colors.primary }} />
+                    </View>
+                    <View style={styles.toggleRow}>
+                        <View style={styles.toggleCopy}>
+                            <Text style={styles.toggleTitle}>Show Coach Code on Page</Text>
+                            <Text style={styles.toggleSub}>If on, the coach code will be displayed on the public team page.</Text>
+                        </View>
+                        <Switch value={showCoachCode} onValueChange={setShowCoachCode} thumbColor={colors.onPrimary} trackColor={{ false: colors.border, true: colors.primary }} />
+                    </View>
+                    <View style={styles.toggleRow}>
+                        <View style={styles.toggleCopy}>
+                            <Text style={styles.toggleTitle}>Show Fan Code on Page</Text>
+                            <Text style={styles.toggleSub}>If on, the spectator code will be displayed on the public team page.</Text>
+                        </View>
+                        <Switch value={showFanCode} onValueChange={setShowFanCode} thumbColor={colors.onPrimary} trackColor={{ false: colors.border, true: colors.primary }} />
+                    </View>
+                    <View style={styles.toggleRow}>
+                        <View style={styles.toggleCopy}>
+                            <Text style={styles.toggleTitle}>Show Fan Count</Text>
+                            <Text style={styles.toggleSub}>If on, the number of followers will be visible to everyone.</Text>
+                        </View>
+                        <Switch value={showFanCount} onValueChange={setShowFanCount} thumbColor={colors.onPrimary} trackColor={{ false: colors.border, true: colors.primary }} />
+                    </View>
+                </View>
+
+                <View style={styles.card}>
+                    <Text style={styles.cardTitle}>Access Codes</Text>
+                    <View style={{ flexDirection: 'row', gap: 12 }}>
+                        <TouchableOpacity style={{ flex: 1, backgroundColor: colors.surfaceSecondary, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: colors.border, alignItems: 'center' }} onPress={() => { const code = joinCodes?.coach || team?.accessCode; if (code) copyToClipboard(code); }} activeOpacity={0.7}>
+                            <Text style={{ fontSize: 11, color: colors.textSecondary, marginBottom: 4, fontWeight: '700' }}>COACH CODE</Text>
+                            <Text style={{ fontSize: 18, fontWeight: '800', letterSpacing: 2, color: colors.primary }}>{joinCodes?.coach || team?.accessCode || 'N/A'}</Text>
+                            <Text style={{ fontSize: 10, color: colors.primary, marginTop: 4 }}>Tap to copy</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={{ flex: 1, backgroundColor: colors.surfaceSecondary, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: colors.border, alignItems: 'center' }} onPress={() => { const code = joinCodes?.spectator || team?.spectatorCode; if (code) copyToClipboard(code); }} activeOpacity={0.7}>
+                            <Text style={{ fontSize: 11, color: colors.textSecondary, marginBottom: 4, fontWeight: '700' }}>FAN CODE</Text>
+                            <Text style={{ fontSize: 18, fontWeight: '800', letterSpacing: 2, color: colors.primary }}>{joinCodes?.spectator || team?.spectatorCode || 'N/A'}</Text>
+                            <Text style={{ fontSize: 10, color: colors.primary, marginTop: 4 }}>Tap to copy</Text>
+                        </TouchableOpacity>
                     </View>
                 </View>
 

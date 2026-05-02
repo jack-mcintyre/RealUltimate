@@ -32,6 +32,9 @@ export default function TeamsHubScreen() {
     const [teamMode, setTeamMode] = useState<'none' | 'create' | 'join'>('none');
     const [teamNameInput, setTeamNameInput] = useState('');
     const [accessCodeInput, setAccessCodeInput] = useState('');
+    const [searchQuery, setSearchQuery] = useState('');
+    const [searchResults, setSearchResults] = useState<Team[]>([]);
+    const [isSearching, setIsSearching] = useState(false);
     const [showScheduleModal, setShowScheduleModal] = useState(false);
     const [scheduleTeamId, setScheduleTeamId] = useState('');
     const [scheduleOpponentName, setScheduleOpponentName] = useState('');
@@ -227,6 +230,25 @@ export default function TeamsHubScreen() {
         }
     };
 
+    useEffect(() => {
+        if (!searchQuery.trim() || searchQuery.trim().length < 2) {
+            setSearchResults([]);
+            return;
+        }
+        const timer = setTimeout(async () => {
+            setIsSearching(true);
+            try {
+                const results = await TeamService.searchPublicTeams(searchQuery);
+                setSearchResults(results);
+            } catch (e) {
+                console.error("Search failed", e);
+            } finally {
+                setIsSearching(false);
+            }
+        }, 500);
+        return () => clearTimeout(timer);
+    }, [searchQuery]);
+
     const openScheduleModal = () => {
         if (coachedTeams.length === 0) {
             Alert.alert('No coached teams', 'Create or join a team as coach before scheduling games.');
@@ -381,7 +403,38 @@ export default function TeamsHubScreen() {
 
                 {teamMode === 'join' && (
                     <View style={styles.formContainer}>
-                        <Text style={styles.formLabel}>Access Code</Text>
+                        <Text style={styles.formLabel}>Find a Team</Text>
+                        
+                        <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.surfaceSecondary, borderRadius: Layout.radiusMd, paddingHorizontal: 12, marginBottom: 16 }}>
+                            <Ionicons name="search" size={20} color={colors.textSecondary} />
+                            <TextInput
+                                style={[styles.input, { flex: 1, backgroundColor: 'transparent', borderWidth: 0, marginBottom: 0 }]}
+                                placeholder="Search public teams..."
+                                placeholderTextColor={colors.textSecondary}
+                                value={searchQuery}
+                                onChangeText={setSearchQuery}
+                            />
+                            {isSearching && <Text style={{ color: colors.textSecondary, fontSize: 12 }}>...</Text>}
+                        </View>
+
+                        {searchResults.length > 0 && (
+                            <View style={{ marginBottom: 16 }}>
+                                {searchResults.map((t) => (
+                                    <TouchableOpacity 
+                                        key={t.id} 
+                                        style={{ flexDirection: 'row', alignItems: 'center', padding: 12, backgroundColor: colors.surfaceSecondary, borderRadius: Layout.radiusSm, marginBottom: 8 }}
+                                        onPress={() => router.push(`/team/${t.id}` as any)}
+                                    >
+                                        <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
+                                            <Text style={{ color: '#fff', fontWeight: 'bold' }}>{t.name.substring(0,2).toUpperCase()}</Text>
+                                        </View>
+                                        <Text style={{ color: colors.text, fontWeight: '600' }}>{t.name}</Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </View>
+                        )}
+
+                        <Text style={[styles.formLabel, { marginTop: 8 }]}>Have an Access Code?</Text>
                         <TextInput
                             style={[styles.input, { textTransform: 'uppercase', textAlign: 'center', letterSpacing: 8, fontSize: 24 }]}
                             placeholder="XXXXXX"
@@ -395,7 +448,7 @@ export default function TeamsHubScreen() {
                             <Ionicons name="enter" size={20} color={colors.onPrimary} style={{ marginRight: 8 }} />
                             <Text style={styles.primaryButtonText}>{isLoading ? 'Joining...' : 'Link to Team'}</Text>
                         </TouchableOpacity>
-                        <TouchableOpacity style={styles.textButton} onPress={() => setTeamMode('none')}>
+                        <TouchableOpacity style={styles.textButton} onPress={() => { setTeamMode('none'); setSearchQuery(''); setSearchResults([]); }}>
                             <Text style={styles.textButtonText}>Cancel</Text>
                         </TouchableOpacity>
                     </View>
@@ -430,6 +483,11 @@ export default function TeamsHubScreen() {
                                                 return `${t.name} vs ${oppName}`;
                                             })();
 
+                                            const scoreDisplay = (() => {
+                                                if (!game) return null;
+                                                return { s1: game.score1 ?? 0, s2: game.score2 ?? 0 };
+                                            })();
+
                                             return (
                                                 <TouchableOpacity 
                                                     key={`live-${t.id}`} 
@@ -448,6 +506,11 @@ export default function TeamsHubScreen() {
                                                             </View>
                                                             <Text style={styles.cardTitle} numberOfLines={1}>{matchLabel}</Text>
                                                         </View>
+                                                        {scoreDisplay && (
+                                                            <View style={{ backgroundColor: colors.error, paddingVertical: 6, paddingHorizontal: 14, borderRadius: 10, marginRight: 10, alignItems: 'center' }}>
+                                                                <Text style={{ fontSize: 20, fontWeight: '900', color: '#FFF', letterSpacing: 1 }}>{scoreDisplay.s1} – {scoreDisplay.s2}</Text>
+                                                            </View>
+                                                        )}
                                                         <View style={styles.playIconContainer}>
                                                             <Ionicons name="play" size={20} color={colors.onPrimary} />
                                                         </View>

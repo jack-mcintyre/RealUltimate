@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Animated, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { auth } from '../../firebaseConfig';
 import { TournamentService } from '../services/TournamentService';
-import { Tournament, TournamentMatch, TournamentSpiritScore } from '../services/types';
+import { Tournament, TournamentMatch, TournamentMatchStatus, TournamentSpiritScore } from '../services/types';
 import { getTypography, Layout } from '../theme/DesignSystem';
 import { ThemeColors, useTheme } from '../theme/ThemeContext';
 
@@ -18,13 +18,14 @@ const matchSort = (left: TournamentMatch, right: TournamentMatch) => {
     return left.id.localeCompare(right.id);
 };
 
-type TabKey = 'overview' | 'pools' | 'bracket' | 'teams';
+type TabKey = 'overview' | 'pools' | 'bracket' | 'teams' | 'activity';
 
 const TABS: { key: TabKey; label: string }[] = [
     { key: 'overview', label: 'Overview' },
     { key: 'pools', label: 'Pools' },
     { key: 'bracket', label: 'Bracket' },
-    { key: 'teams', label: 'Participants' }
+    { key: 'teams', label: 'Participants' },
+    { key: 'activity', label: 'Activity' },
 ];
 
 const SLOT_HEIGHT = 90; // Base vertical height per slot in Round 1
@@ -58,15 +59,32 @@ export default function TournamentDetailScreen() {
     const [joinTeamName, setJoinTeamName] = useState('');
     const [editParticipantId, setEditParticipantId] = useState('');
     const [editParticipantName, setEditParticipantName] = useState('');
+    const [editParticipantPool, setEditParticipantPool] = useState('');
     const [participantModalOpen, setParticipantModalOpen] = useState(false);
+
+    const [customMatchModalOpen, setCustomMatchModalOpen] = useState(false);
+    const [customMatchTeamA, setCustomMatchTeamA] = useState('');
+    const [customMatchTeamB, setCustomMatchTeamB] = useState('');
+
+    const [overrideMatchModalOpen, setOverrideMatchModalOpen] = useState(false);
+    const [overrideMatchSlot, setOverrideMatchSlot] = useState<'A' | 'B'>('A');
+    const [overrideMatchTeamName, setOverrideMatchTeamName] = useState('');
+
+    const [newAnnouncement, setNewAnnouncement] = useState('');
+
+    const [editingMatchField, setEditingMatchField] = useState('');
+    const [editingMatchDay, setEditingMatchDay] = useState('');
+    const [editingMatchStatus, setEditingMatchStatus] = useState<TournamentMatchStatus>('upcoming');
+    const [dayFilter, setDayFilter] = useState<number | null>(null);
+    const [holdReason, setHoldReason] = useState('');
 
     const isCreator = !!tournament?.admins?.[auth.currentUser?.uid || ''];
 
     const scrollY = useRef(new Animated.Value(0)).current;
 
-    const headerPadding = scrollY.interpolate({ inputRange: [0, 100], outputRange: [50, 40], extrapolate: 'clamp' });
-    const subtitleOpacity = scrollY.interpolate({ inputRange: [0, 60], outputRange: [1, 0], extrapolate: 'clamp' });
-    const subtitleHeight = scrollY.interpolate({ inputRange: [0, 60], outputRange: [20, 0], extrapolate: 'clamp' });
+    const headerPadding = scrollY.interpolate({ inputRange: [0, 100], outputRange: [60, 20], extrapolate: 'clamp' });
+    const subtitleOpacity = scrollY.interpolate({ inputRange: [0, 40], outputRange: [1, 0], extrapolate: 'clamp' });
+    const subtitleHeight = scrollY.interpolate({ inputRange: [0, 40], outputRange: [20, 0], extrapolate: 'clamp' });
 
     useEffect(() => {
         if (!tournamentId) return;
@@ -94,6 +112,11 @@ export default function TournamentDetailScreen() {
         return tournament?.participants?.[participantId]?.name || 'TBD';
     };
 
+    const participantSeed = (participantId: string): number | undefined => {
+        if (!participantId || participantId === 'BYE') return undefined;
+        return tournament?.participants?.[participantId]?.seed;
+    };
+
     const formatBracketName = (participantId: string, match: TournamentMatch, slot: 'A' | 'B') => {
         if (participantId && participantId !== 'BYE') {
             return tournament?.participants?.[participantId]?.name || 'TBD';
@@ -105,14 +128,19 @@ export default function TournamentDetailScreen() {
     };
 
     const openMatchEditor = (matchId: string) => {
+        const match = tournament?.matches?.[matchId];
         setEditingMatchId(matchId);
-        setEditingMatchTime(tournament?.matches?.[matchId]?.scheduledTime || '');
+        setEditingMatchTime(match?.scheduledTime || '');
+        setEditingMatchField(match?.fieldName || '');
+        setEditingMatchDay(match?.day ? String(match.day) : '');
+        setEditingMatchStatus(match?.matchStatus || 'upcoming');
         setMatchEditorOpen(true);
     };
 
     const openEditParticipant = (t: any) => {
         setEditParticipantId(t.id);
         setEditParticipantName(t.name);
+        setEditParticipantPool(tournament?.manualPoolAssignments?.[t.id] || '');
         setParticipantModalOpen(true);
     };
 
@@ -253,6 +281,90 @@ export default function TournamentDetailScreen() {
                     <Text style={styles.infoValue}>{tournament.privacy === 'public' ? 'Public Directory' : 'Private (Code Only)'}</Text>
                 </View>
             </View>
+            {tournament.bio ? (
+                <View style={styles.infoBox}>
+                    <Text style={styles.infoLabel}>Bio</Text>
+                    <Text style={[styles.infoValue, { marginTop: 4, lineHeight: 20 }]}>{tournament.bio}</Text>
+                </View>
+            ) : null}
+
+            {/* Schedule Hold Banner */}
+            {tournament.scheduleHold?.active && (
+                <View style={{ backgroundColor: '#FF9500', borderRadius: 12, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <Ionicons name="warning" size={20} color="#FFF" />
+                    <View style={{ flex: 1 }}>
+                        <Text style={{ color: '#FFF', fontWeight: '800', fontSize: 14 }}>SCHEDULE SUSPENDED</Text>
+                        <Text style={{ color: 'rgba(255,255,255,0.85)', fontSize: 12, marginTop: 2 }}>{tournament.scheduleHold.reason || 'Schedule on hold'}</Text>
+                    </View>
+                    {isCreator && (
+                        <TouchableOpacity style={{ backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 }} onPress={async () => {
+                            await TournamentService.setScheduleHold(tournament.id, false);
+                        }}>
+                            <Text style={{ color: '#FFF', fontWeight: '700', fontSize: 12 }}>Resume</Text>
+                        </TouchableOpacity>
+                    )}
+                </View>
+            )}
+
+            {/* Schedule Hold Control (organizer only, when not on hold) */}
+            {isCreator && tournament.status === 'active' && !tournament.scheduleHold?.active && (
+                <View style={[styles.infoBox, { flexDirection: 'row', alignItems: 'center', gap: 8 }]}>
+                    <TextInput
+                        style={{ flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, color: colors.text, fontSize: 13, backgroundColor: colors.surfaceSecondary }}
+                        placeholder="Delay reason (e.g. Weather)"
+                        placeholderTextColor={colors.textSecondary}
+                        value={holdReason}
+                        onChangeText={setHoldReason}
+                    />
+                    <TouchableOpacity style={{ backgroundColor: '#FF9500', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 }} onPress={async () => {
+                        await TournamentService.setScheduleHold(tournament.id, true, holdReason || 'Weather delay');
+                        setHoldReason('');
+                    }}>
+                        <Text style={{ color: '#FFF', fontWeight: '700', fontSize: 12 }}>Pause</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
+
+            {isCreator && (
+                <View style={[styles.infoBox, { borderColor: colors.primary, backgroundColor: colors.surfaceSecondary, flexDirection: 'row', alignItems: 'center' }]}>
+                    <TextInput 
+                        style={{ flex: 1, borderWidth: 1, borderColor: colors.border, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, marginRight: 10, color: colors.text, backgroundColor: colors.surface, fontSize: 14 }}
+                        placeholder="Post new announcement..."
+                        placeholderTextColor={colors.textSecondary}
+                        value={newAnnouncement}
+                        onChangeText={setNewAnnouncement}
+                    />
+                    <TouchableOpacity style={{ backgroundColor: colors.primary, borderRadius: 8, paddingHorizontal: 18, paddingVertical: 10 }} onPress={async () => {
+                        if (!newAnnouncement.trim()) return;
+                        try {
+                            await TournamentService.postAnnouncement(tournament.id, newAnnouncement.trim());
+                            setNewAnnouncement('');
+                        } catch (e: any) {
+                            Alert.alert('Error', e.message);
+                        }
+                    }}>
+                        <Text style={{ color: '#FFF', fontWeight: '700', fontSize: 14 }}>Post</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
+
+            {tournament.announcementFeed && tournament.announcementFeed.length > 0 ? (
+                <View style={styles.infoBox}>
+                    <Text style={[styles.infoLabel, { color: colors.primary, fontWeight: 'bold', marginBottom: 12 }]}>Announcements</Text>
+                    {tournament.announcementFeed.map((ann, idx) => (
+                        <View key={ann.id} style={{ marginBottom: idx === tournament.announcementFeed!.length - 1 ? 0 : 12, paddingBottom: idx === tournament.announcementFeed!.length - 1 ? 0 : 12, borderBottomWidth: idx === tournament.announcementFeed!.length - 1 ? 0 : 1, borderBottomColor: colors.border }}>
+                            <Text style={{ fontSize: 10, color: colors.textSecondary, marginBottom: 4 }}>{new Date(ann.timestamp).toLocaleString()}</Text>
+                            <Text style={[styles.infoValue, { lineHeight: 20 }]}>{ann.message}</Text>
+                        </View>
+                    ))}
+                </View>
+            ) : tournament.announcements ? (
+                <View style={[styles.infoBox, { borderColor: colors.primary, backgroundColor: colors.surfaceSecondary }]}>
+                    <Text style={[styles.infoLabel, { color: colors.primary, fontWeight: 'bold' }]}>Announcements</Text>
+                    <Text style={[styles.infoValue, { marginTop: 4, lineHeight: 20 }]}>{tournament.announcements}</Text>
+                </View>
+            ) : null}
+
             <View style={styles.infoBox}>
                 <Text style={styles.infoLabel}>Tournament Engine Explanation:</Text>
                 <Text style={[styles.infoValue, { marginTop: 4, lineHeight: 20 }]}>
@@ -311,35 +423,124 @@ export default function TournamentDetailScreen() {
             onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: false })}
             scrollEventThrottle={16}
         >
+            {isCreator && tournament.status === 'draft' && (
+                <TouchableOpacity style={[styles.backBtn, { alignSelf: 'flex-start', marginHorizontal: 16, marginTop: 16, flexDirection: 'row', alignItems: 'center', gap: 6 }]} onPress={() => router.push(`/tournament/pool-config/${tournament.id}`)}>
+                    <Ionicons name="options-outline" size={16} color={colors.text} />
+                    <Text style={styles.backBtnText}>Pool Configuration</Text>
+                </TouchableOpacity>
+            )}
+            {isCreator && tournament.status === 'active' && (
+                <TouchableOpacity style={[styles.backBtn, { alignSelf: 'flex-start', marginHorizontal: 16, marginTop: 16, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.primary, borderColor: colors.primary }]} onPress={() => setCustomMatchModalOpen(true)}>
+                    <Ionicons name="add" size={16} color="#FFF" />
+                    <Text style={[styles.backBtnText, { color: '#FFF' }]}>Add Custom Match</Text>
+                </TouchableOpacity>
+            )}
+            {/* Day Filter */}
+            {tournament.scheduleDays && tournament.scheduleDays > 1 && (
+                <View style={{ flexDirection: 'row', gap: 8, marginHorizontal: 16, marginTop: 8 }}>
+                    <TouchableOpacity style={{ paddingHorizontal: 14, paddingVertical: 6, borderRadius: 14, backgroundColor: dayFilter === null ? colors.primary : colors.surfaceSecondary, borderWidth: 1, borderColor: dayFilter === null ? colors.primary : colors.border }} onPress={() => setDayFilter(null)}>
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: dayFilter === null ? '#FFF' : colors.textSecondary }}>All</Text>
+                    </TouchableOpacity>
+                    {Array.from({ length: tournament.scheduleDays }, (_, i) => i + 1).map(d => (
+                        <TouchableOpacity key={d} style={{ paddingHorizontal: 14, paddingVertical: 6, borderRadius: 14, backgroundColor: dayFilter === d ? colors.primary : colors.surfaceSecondary, borderWidth: 1, borderColor: dayFilter === d ? colors.primary : colors.border }} onPress={() => setDayFilter(d)}>
+                            <Text style={{ fontSize: 12, fontWeight: '700', color: dayFilter === d ? '#FFF' : colors.textSecondary }}>Day {d}</Text>
+                        </TouchableOpacity>
+                    ))}
+                </View>
+            )}
             {poolMatches.length === 0 ? (
                 <Text style={styles.emptyText}>No pool play matches generated.</Text>
             ) : (
                 <View style={styles.listCard}>
-                    {poolMatches.map(m => (
+                    {poolMatches.filter(m => dayFilter === null || m.day === dayFilter).map(m => {
+                        const statusColor = m.matchStatus === 'in_progress' ? '#34C759' : m.matchStatus === 'final' ? colors.textSecondary : m.matchStatus === 'cancelled' ? '#FF3B30' : colors.border;
+                        return (
                         <View key={m.id} style={styles.poolMatchRow}>
                             <View style={styles.poolMatchMeta}>
-                                <Text style={styles.poolMatchMetaText}>Round {m.round}</Text>
-                                {m.scheduledTime && (
-                                    <Text style={[styles.poolMatchMetaText, { color: colors.primary, marginTop: 4, fontSize: 10 }]}>{m.scheduledTime}</Text>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                    <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: statusColor }} />
+                                    <Text style={styles.poolMatchMetaText}>R{m.round}{m.group ? ` · Pool ${m.group}` : ''}</Text>
+                                </View>
+                                {m.fieldName && (
+                                    <View style={{ backgroundColor: colors.primary, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2, marginTop: 4, alignSelf: 'flex-start' }}>
+                                        <Text style={{ color: '#FFF', fontSize: 9, fontWeight: '700' }}>{m.fieldName}</Text>
+                                    </View>
                                 )}
+                                {m.scheduledTime && (
+                                    <Text style={[styles.poolMatchMetaText, { color: colors.primary, marginTop: 2, fontSize: 10 }]}>{m.scheduledTime}</Text>
+                                )}
+                                {m.day && <Text style={[styles.poolMatchMetaText, { fontSize: 9, color: colors.textSecondary }]}>Day {m.day}</Text>}
                             </View>
                             <View style={[styles.poolMatchTeams, { justifyContent: 'center' }]}>
-                                <Text style={[styles.poolTeamName, { textAlign: 'right', fontSize: 16 }]} numberOfLines={1}>{participantName(m.teamAId)}</Text>
-                                <View style={{ flexDirection: 'row', alignItems: 'center', marginHorizontal: 12 }}>
-                                    <Text style={[styles.poolTeamScore, { width: 28, textAlign: 'right', fontSize: 18 }]}>{m.teamAScore ?? '-'}</Text>
-                                    <View style={{ width: 20, justifyContent: 'center', alignItems: 'center', height: 20 }}>
-                                        <Text style={{ color: colors.textSecondary, fontWeight: 'bold', fontSize: 18, lineHeight: 20 }}>-</Text>
-                                    </View>
-                                    <Text style={[styles.poolTeamScore, { width: 28, textAlign: 'left', fontSize: 18 }]}>{m.teamBScore ?? '-'}</Text>
+                                <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
+                                    {m.captainCheckIn?.teamA && (
+                                        <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: '#34C759', alignItems: 'center', justifyContent: 'center' }}>
+                                            <Ionicons name="checkmark" size={10} color="#FFF" />
+                                        </View>
+                                    )}
+                                    {participantSeed(m.teamAId) != null && (
+                                        <Text style={{ fontSize: 10, fontWeight: '600', color: colors.textSecondary }}>{participantSeed(m.teamAId)}</Text>
+                                    )}
+                                    <Text style={[styles.poolTeamName, { textAlign: 'right', fontSize: 14 }]} numberOfLines={2}>
+                                        {participantName(m.teamAId)}
+                                    </Text>
                                 </View>
-                                <Text style={[styles.poolTeamName, { fontSize: 16 }]} numberOfLines={1}>{participantName(m.teamBId)}</Text>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginHorizontal: 8, minWidth: 90 }}>
+                                    <Text style={{ fontWeight: 'bold', fontSize: 18, color: colors.text, width: 30, textAlign: 'right' }}>{m.teamAScore ?? '-'}</Text>
+                                    <Text style={{ fontWeight: 'bold', fontSize: 18, color: colors.textSecondary, width: 30, textAlign: 'center' }}>–</Text>
+                                    <Text style={{ fontWeight: 'bold', fontSize: 18, color: colors.text, width: 30, textAlign: 'left' }}>{m.teamBScore ?? '-'}</Text>
+                                </View>
+                                <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 4 }}>
+                                    <Text style={[styles.poolTeamName, { fontSize: 14 }]} numberOfLines={2}>
+                                        {participantName(m.teamBId)}
+                                    </Text>
+                                    {participantSeed(m.teamBId) != null && (
+                                        <Text style={{ fontSize: 10, fontWeight: '600', color: colors.textSecondary }}>{participantSeed(m.teamBId)}</Text>
+                                    )}
+                                    {m.captainCheckIn?.teamB && (
+                                        <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: '#34C759', alignItems: 'center', justifyContent: 'center' }}>
+                                            <Ionicons name="checkmark" size={10} color="#FFF" />
+                                        </View>
+                                    )}
+                                </View>
                             </View>
                             <TouchableOpacity style={styles.editBtn} onPress={() => openMatchEditor(m.id)}>
                                 <Text style={styles.editBtnText}>Edit</Text>
                             </TouchableOpacity>
                         </View>
-                    ))}
+                    )})}
                 </View>
+            )}
+
+            {/* Per-Pool Standings */}
+            {tournament.pools && Object.keys(tournament.pools).length > 0 && standingsRows.length > 0 && (
+                <>
+                    {Object.entries(tournament.pools).sort(([a], [b]) => a.localeCompare(b)).map(([poolKey, teamIds]) => {
+                        const poolStandings = standingsRows.filter(r => (teamIds as string[]).includes(r.participantId));
+                        if (poolStandings.length === 0) return null;
+                        return (
+                            <View key={poolKey} style={[styles.listCard, { marginTop: 16 }]}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border }}>
+                                    <Text style={{ fontWeight: '800', fontSize: 14, color: colors.primary }}>Pool {poolKey} Standings</Text>
+                                    <Text style={{ fontSize: 11, color: colors.textSecondary }}>{poolStandings.length} teams</Text>
+                                </View>
+                                <View style={{ paddingHorizontal: 14, paddingVertical: 4, flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: colors.border }}>
+                                    <Text style={{ flex: 1, fontSize: 10, fontWeight: '600', color: colors.textSecondary }}>TEAM</Text>
+                                    <Text style={{ width: 44, fontSize: 10, fontWeight: '600', color: colors.textSecondary, textAlign: 'center' }}>W-L</Text>
+                                    <Text style={{ width: 44, fontSize: 10, fontWeight: '600', color: colors.textSecondary, textAlign: 'right' }}>PD</Text>
+                                </View>
+                                {poolStandings.map((row, idx) => (
+                                    <View key={row.participantId} style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 8, borderBottomWidth: idx < poolStandings.length - 1 ? 1 : 0, borderBottomColor: colors.border, backgroundColor: idx < (tournament.qualifiersPerPool || 2) ? colors.primary + '08' : 'transparent' }}>
+                                        <Text style={{ width: 20, fontSize: 12, fontWeight: '700', color: idx < (tournament.qualifiersPerPool || 2) ? colors.primary : colors.textSecondary }}>{idx + 1}.</Text>
+                                        <Text style={{ flex: 1, fontSize: 13, fontWeight: '600', color: colors.text }} numberOfLines={1}>{participantName(row.participantId)}</Text>
+                                        <Text style={{ width: 44, fontSize: 12, textAlign: 'center', color: colors.text }}>{row.wins}-{row.losses}</Text>
+                                        <Text style={{ width: 44, fontSize: 12, textAlign: 'right', fontWeight: '600', color: row.pointDiff > 0 ? '#34C759' : row.pointDiff < 0 ? '#FF3B30' : colors.textSecondary }}>{row.pointDiff > 0 ? `+${row.pointDiff}` : row.pointDiff}</Text>
+                                    </View>
+                                ))}
+                            </View>
+                        );
+                    })}
+                </>
             )}
         </Animated.ScrollView>
     );
@@ -455,6 +656,12 @@ export default function TournamentDetailScreen() {
             onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: false })}
             scrollEventThrottle={16}
         >
+            {isCreator && tournament.status === 'draft' && (
+                <TouchableOpacity style={[styles.backBtn, { alignSelf: 'flex-start', marginHorizontal: 16, marginTop: 16, flexDirection: 'row', alignItems: 'center', gap: 6 }]} onPress={() => router.push(`/tournament/bracket-config/${tournament.id}`)}>
+                    <Ionicons name="git-network-outline" size={16} color={colors.text} />
+                    <Text style={styles.backBtnText}>Bracket Configuration</Text>
+                </TouchableOpacity>
+            )}
             {championshipMatches.length === 0 && consolationMatches.length === 0 ? (
                 <Text style={styles.emptyText}>Bracket not generated yet.</Text>
             ) : (
@@ -465,6 +672,47 @@ export default function TournamentDetailScreen() {
             )}
         </Animated.ScrollView>
     );
+    const renderActivityLog = () => {
+        const log = tournament?.activityLog || [];
+        const iconMap: Record<string, { name: string; color: string }> = {
+            score: { name: 'football', color: '#34C759' },
+            schedule: { name: 'time', color: '#FF9500' },
+            system: { name: 'information-circle', color: colors.primary },
+            announcement: { name: 'megaphone', color: '#AF52DE' },
+        };
+        return (
+            <Animated.ScrollView
+                contentContainerStyle={styles.tabContent}
+                onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: false })}
+                scrollEventThrottle={16}
+            >
+                {log.length === 0 ? (
+                    <View style={{ alignItems: 'center', paddingVertical: 40 }}>
+                        <Ionicons name="time-outline" size={40} color={colors.textSecondary} />
+                        <Text style={[styles.emptyText, { marginTop: 12 }]}>No activity yet.</Text>
+                        <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 4 }}>Score updates, schedule changes, and announcements will appear here.</Text>
+                    </View>
+                ) : (
+                    <View style={styles.listCard}>
+                        {log.map((entry, idx) => {
+                            const icon = iconMap[entry.type] || iconMap.system;
+                            return (
+                                <View key={entry.id} style={{ flexDirection: 'row', paddingVertical: 12, paddingHorizontal: 14, borderBottomWidth: idx < log.length - 1 ? 1 : 0, borderBottomColor: colors.border, gap: 12 }}>
+                                    <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: icon.color + '20', alignItems: 'center', justifyContent: 'center' }}>
+                                        <Ionicons name={icon.name as any} size={16} color={icon.color} />
+                                    </View>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={{ color: colors.text, fontSize: 13, lineHeight: 18 }}>{typeof entry.message === 'string' ? entry.message : typeof entry.message === 'object' ? (entry.message as any).message || 'Activity recorded' : 'Activity recorded'}</Text>
+                                        <Text style={{ color: colors.textSecondary, fontSize: 10, marginTop: 4 }}>{new Date(entry.timestamp).toLocaleString()}</Text>
+                                    </View>
+                                </View>
+                            );
+                        })}
+                    </View>
+                )}
+            </Animated.ScrollView>
+        );
+    };
 
     const handleAddParticipant = async () => {
         if (!addTeamCode.trim()) return;
@@ -522,22 +770,25 @@ export default function TournamentDetailScreen() {
     return (
         <View style={styles.container}>
             {/* Header Area */}
+            {tournament.bannerUrl ? (
+                <Animated.Image source={{ uri: tournament.bannerUrl }} style={[StyleSheet.absoluteFillObject, { height: 250, opacity: 0.3 }]} resizeMode="cover" />
+            ) : null}
             <Animated.View style={[styles.heroHeader, { paddingTop: headerPadding }]}>
                 <Animated.View style={[styles.heroTopRow, { opacity: scrollY.interpolate({ inputRange: [0, 50], outputRange: [1, 0], extrapolate: 'clamp' }), height: scrollY.interpolate({ inputRange: [0, 50], outputRange: [40, 0], extrapolate: 'clamp' }), overflow: 'hidden' }]}>
                     <TouchableOpacity style={styles.heroBackBtn} onPress={() => router.back()}>
                         <Ionicons name="chevron-back" size={24} color="#FFF" />
                     </TouchableOpacity>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                        <View style={styles.heroStatusPill}>
-                            <Text style={styles.heroStatusText}>{tournament.status.toUpperCase()}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        <View style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, backgroundColor: tournament.status === 'draft' ? 'rgba(255,255,255,0.15)' : tournament.status === 'active' ? '#34C759' : 'rgba(255,255,255,0.15)' }}>
+                            <Text style={{ color: '#FFF', fontSize: 11, fontWeight: '700', letterSpacing: 0.5 }}>{tournament.status.toUpperCase()}</Text>
                         </View>
                         {isCreator && (
-                            <TouchableOpacity style={styles.heroBackBtn} onPress={() => router.push(`/tournament/settings/${tournament.id}`)}>
-                                <Ionicons name="settings-outline" size={20} color="#FFF" />
+                            <TouchableOpacity style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' }} onPress={() => router.push(`/tournament/settings/${tournament.id}`)}>
+                                <Ionicons name="settings-outline" size={18} color="#FFF" />
                             </TouchableOpacity>
                         )}
                         {isCreator && tournament.status === 'draft' && (
-                            <TouchableOpacity style={[styles.heroBackBtn, { paddingHorizontal: 12, backgroundColor: colors.primary }]} onPress={async () => {
+                            <TouchableOpacity style={{ paddingHorizontal: 20, paddingVertical: 8, borderRadius: 20, backgroundColor: '#34C759' }} onPress={async () => {
                                 try {
                                     await TournamentService.startTournament(tournament.id);
                                     Alert.alert('Tournament Started!', 'Brackets and pool play are now generated and active.');
@@ -545,7 +796,7 @@ export default function TournamentDetailScreen() {
                                     Alert.alert('Error', e.message);
                                 }
                             }}>
-                                <Text style={{ color: '#FFF', fontWeight: 'bold', fontSize: 12 }}>START</Text>
+                                <Text style={{ color: '#FFF', fontWeight: '800', fontSize: 13, letterSpacing: 0.5 }}>START ▶</Text>
                             </TouchableOpacity>
                         )}
                         {!isCreator && tournament.enrollmentMode === 'open' && tournament.status === 'draft' && (
@@ -555,10 +806,17 @@ export default function TournamentDetailScreen() {
                         )}
                     </View>
                 </Animated.View>
-                <Animated.Text style={[styles.heroTitle, { fontSize: scrollY.interpolate({ inputRange: [0, 100], outputRange: [28, 20], extrapolate: 'clamp' }) }]}>{tournament.name}</Animated.Text>
-                <Animated.View style={{ opacity: subtitleOpacity, height: subtitleHeight, overflow: 'hidden' }}>
-                    <Text style={styles.heroSubtitle}>{tournament.hostName ? `Hosted by ${tournament.hostName}` : `Created by Organizer`}</Text>
-                </Animated.View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    {tournament.logoUrl ? (
+                        <Animated.Image source={{ uri: tournament.logoUrl }} style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.surfaceSecondary }} />
+                    ) : null}
+                    <View style={{ flex: 1 }}>
+                        <Animated.Text style={[styles.heroTitle, { fontSize: scrollY.interpolate({ inputRange: [0, 100], outputRange: [28, 20], extrapolate: 'clamp' }) }]} numberOfLines={1}>{tournament.name}</Animated.Text>
+                        <Animated.View style={{ opacity: subtitleOpacity, height: subtitleHeight, overflow: 'hidden' }}>
+                            <Text style={styles.heroSubtitle}>{tournament.hostName ? `Hosted by ${tournament.hostName}` : `Created by Organizer`}</Text>
+                        </Animated.View>
+                    </View>
+                </View>
             </Animated.View>
 
             {/* Tab Bar */}
@@ -582,6 +840,7 @@ export default function TournamentDetailScreen() {
                 {activeTab === 'pools' && renderPools()}
                 {activeTab === 'bracket' && renderBracketTab()}
                 {activeTab === 'teams' && renderTeams()}
+                {activeTab === 'activity' && renderActivityLog()}
             </View>
 
             {/* Modals */}
@@ -603,7 +862,14 @@ export default function TournamentDetailScreen() {
                         </View>
 
                         <View style={styles.modalInputRow}>
-                            <Text style={styles.modalLabel} numberOfLines={1}>{participantName(editingMatchId ? (tournament?.matches?.[editingMatchId]?.teamAId || '') : '')}</Text>
+                            <View style={{ flex: 1, marginRight: 8 }}>
+                                <Text style={styles.modalLabel} numberOfLines={1}>{participantName(editingMatchId ? (tournament?.matches?.[editingMatchId]?.teamAId || '') : '')}</Text>
+                                {isCreator && (
+                                    <TouchableOpacity onPress={() => { setOverrideMatchSlot('A'); setOverrideMatchModalOpen(true); setMatchEditorOpen(false); }}>
+                                        <Text style={{ fontSize: 10, color: colors.primary, marginTop: 4 }}>Override</Text>
+                                    </TouchableOpacity>
+                                )}
+                            </View>
                             <TextInput
                                 style={styles.modalInput}
                                 keyboardType="number-pad"
@@ -613,7 +879,14 @@ export default function TournamentDetailScreen() {
                         </View>
 
                         <View style={styles.modalInputRow}>
-                            <Text style={styles.modalLabel} numberOfLines={1}>{participantName(editingMatchId ? (tournament?.matches?.[editingMatchId]?.teamBId || '') : '')}</Text>
+                            <View style={{ flex: 1, marginRight: 8 }}>
+                                <Text style={styles.modalLabel} numberOfLines={1}>{participantName(editingMatchId ? (tournament?.matches?.[editingMatchId]?.teamBId || '') : '')}</Text>
+                                {isCreator && (
+                                    <TouchableOpacity onPress={() => { setOverrideMatchSlot('B'); setOverrideMatchModalOpen(true); setMatchEditorOpen(false); }}>
+                                        <Text style={{ fontSize: 10, color: colors.primary, marginTop: 4 }}>Override</Text>
+                                    </TouchableOpacity>
+                                )}
+                            </View>
                             <TextInput
                                 style={styles.modalInput}
                                 keyboardType="number-pad"
@@ -622,11 +895,95 @@ export default function TournamentDetailScreen() {
                             />
                         </View>
 
+                        {/* Field, Day, Status */}
+                        {isCreator && (
+                            <>
+                                <View style={styles.modalInputRow}>
+                                    <Text style={styles.modalLabel}>Field</Text>
+                                    <TextInput
+                                        style={[styles.modalInput, { flex: 2 }]}
+                                        placeholder="e.g. Field 1"
+                                        placeholderTextColor={colors.textSecondary}
+                                        value={editingMatchField}
+                                        onChangeText={setEditingMatchField}
+                                    />
+                                </View>
+                                <View style={styles.modalInputRow}>
+                                    <Text style={styles.modalLabel}>Day</Text>
+                                    <TextInput
+                                        style={[styles.modalInput, { flex: 2 }]}
+                                        placeholder="1, 2, 3..."
+                                        keyboardType="number-pad"
+                                        placeholderTextColor={colors.textSecondary}
+                                        value={editingMatchDay}
+                                        onChangeText={setEditingMatchDay}
+                                    />
+                                </View>
+                                <View style={styles.modalInputRow}>
+                                    <Text style={styles.modalLabel}>Status</Text>
+                                    <View style={{ flexDirection: 'row', gap: 4, flex: 2 }}>
+                                        {(['upcoming', 'in_progress', 'final', 'cancelled'] as const).map(s => (
+                                            <TouchableOpacity key={s} style={{ flex: 1, paddingVertical: 6, borderRadius: 6, backgroundColor: editingMatchStatus === s ? (s === 'cancelled' ? '#FF3B30' : s === 'in_progress' ? '#34C759' : s === 'final' ? colors.textSecondary : colors.primary) : colors.surfaceSecondary, alignItems: 'center', borderWidth: 1, borderColor: colors.border }} onPress={() => setEditingMatchStatus(s)}>
+                                                <Text style={{ fontSize: 9, fontWeight: '700', color: editingMatchStatus === s ? '#FFF' : colors.textSecondary }}>{s === 'in_progress' ? 'LIVE' : s.toUpperCase()}</Text>
+                                            </TouchableOpacity>
+                                        ))}
+                                    </View>
+                                </View>
+                                {/* Captain Check-In Buttons */}
+                                <View style={styles.modalInputRow}>
+                                    <Text style={styles.modalLabel}>Check-in</Text>
+                                    <View style={{ flexDirection: 'row', gap: 8, flex: 2 }}>
+                                        {(() => {
+                                            const match = tournament?.matches?.[editingMatchId];
+                                            const aChecked = !!match?.captainCheckIn?.teamA;
+                                            const bChecked = !!match?.captainCheckIn?.teamB;
+                                            return (
+                                                <>
+                                                    <TouchableOpacity style={{ flex: 1, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: aChecked ? '#34C759' : colors.border, backgroundColor: aChecked ? '#34C759' : colors.surfaceSecondary, alignItems: 'center' }} onPress={async () => {
+                                                        try { await TournamentService.captainCheckIn(tournament.id, editingMatchId, 'teamA'); } catch (e: any) { Alert.alert('Error', e.message); }
+                                                    }}>
+                                                        <Text style={{ fontSize: 11, fontWeight: '600', color: aChecked ? '#FFF' : colors.text }}>{aChecked ? '✓ Checked In' : '✓ Team A'}</Text>
+                                                    </TouchableOpacity>
+                                                    <TouchableOpacity style={{ flex: 1, paddingVertical: 8, borderRadius: 8, borderWidth: 1, borderColor: bChecked ? '#34C759' : colors.border, backgroundColor: bChecked ? '#34C759' : colors.surfaceSecondary, alignItems: 'center' }} onPress={async () => {
+                                                        try { await TournamentService.captainCheckIn(tournament.id, editingMatchId, 'teamB'); } catch (e: any) { Alert.alert('Error', e.message); }
+                                                    }}>
+                                                        <Text style={{ fontSize: 11, fontWeight: '600', color: bChecked ? '#FFF' : colors.text }}>{bChecked ? '✓ Checked In' : '✓ Team B'}</Text>
+                                                    </TouchableOpacity>
+                                                </>
+                                            );
+                                        })()}
+                                    </View>
+                                </View>
+                            </>
+                        )}
+
                         <View style={styles.modalFooter}>
                             <TouchableOpacity style={styles.modalBtn} onPress={() => setMatchEditorOpen(false)}>
                                 <Text style={styles.modalBtnText}>Cancel</Text>
                             </TouchableOpacity>
-                            <TouchableOpacity style={[styles.modalBtn, styles.modalBtnPrimary]} onPress={async () => { await handleSaveScore(editingMatchId); setMatchEditorOpen(false); }}>
+                            <TouchableOpacity style={[styles.modalBtn, styles.modalBtnPrimary]} onPress={async () => {
+                                const match = tournament?.matches?.[editingMatchId];
+                                await handleSaveScore(editingMatchId);
+                                // Save field, day, status if organizer
+                                if (isCreator) {
+                                    if (editingMatchField) await TournamentService.updateMatchField(tournament.id, editingMatchId, editingMatchField);
+                                    if (editingMatchDay) await TournamentService.updateMatchDay(tournament.id, editingMatchId, Number(editingMatchDay) || null);
+                                    await TournamentService.updateMatchStatus(tournament.id, editingMatchId, editingMatchStatus);
+                                }
+                                // Log activity for score updates
+                                const draft = scoreDrafts[editingMatchId];
+                                if (draft?.a && draft?.b) {
+                                    const teamA = participantName(match?.teamAId || '');
+                                    const teamB = participantName(match?.teamBId || '');
+                                    const msg = editingMatchStatus === 'final'
+                                        ? `Final: ${teamA} ${draft.a} – ${draft.b} ${teamB}`
+                                        : `Score updated: ${teamA} ${draft.a} – ${draft.b} ${teamB}`;
+                                    try {
+                                        await TournamentService.logActivity(tournament.id, msg, 'score');
+                                    } catch {}
+                                }
+                                setMatchEditorOpen(false);
+                            }}>
                                 <Text style={styles.modalBtnTextPrimary}>Save</Text>
                             </TouchableOpacity>
                         </View>
@@ -681,6 +1038,19 @@ export default function TournamentDetailScreen() {
                                 onChangeText={setEditParticipantName}
                             />
                         </View>
+                        {tournament.engine === 'pool_to_bracket' && (
+                            <View style={styles.modalInputRow}>
+                                <Text style={styles.modalLabel}>Manual Pool Assignment (Optional)</Text>
+                                <TextInput
+                                    style={styles.modalInput}
+                                    placeholder="e.g. A, B, C, D"
+                                    placeholderTextColor={colors.textSecondary}
+                                    value={editParticipantPool}
+                                    onChangeText={(val) => setEditParticipantPool(val.toUpperCase())}
+                                    maxLength={1}
+                                />
+                            </View>
+                        )}
                         <TouchableOpacity style={[styles.modalBtn, { backgroundColor: '#FF3B30', marginTop: 16 }]} onPress={() => {
                             Alert.alert('Remove Team', 'Are you sure you want to remove this team?', [
                                 { text: 'Cancel', style: 'cancel' },
@@ -701,6 +1071,9 @@ export default function TournamentDetailScreen() {
                                 if (!editParticipantName.trim()) return;
                                 try {
                                     await TournamentService.updateParticipant(tournament.id, editParticipantId, editParticipantName);
+                                    if (tournament.engine === 'pool_to_bracket') {
+                                        await TournamentService.updateParticipantPool(tournament.id, editParticipantId, editParticipantPool || null);
+                                    }
                                     setParticipantModalOpen(false);
                                 } catch (e: any) {
                                     Alert.alert('Error', e.message);
@@ -744,6 +1117,115 @@ export default function TournamentDetailScreen() {
                     </View>
                 </View>
             </Modal>
+
+            <Modal visible={customMatchModalOpen} animationType="slide" transparent onRequestClose={() => setCustomMatchModalOpen(false)}>
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalCard}>
+                        <Text style={styles.modalTitle}>Add Custom Match</Text>
+                        <Text style={styles.modalSubtitle}>Create an ad-hoc pool match</Text>
+                        
+                        <View style={styles.modalInputRow}>
+                            <Text style={styles.modalLabel}>Team A ID or Exact Name</Text>
+                            <TextInput
+                                style={styles.modalInput}
+                                placeholder="e.g. River City"
+                                placeholderTextColor={colors.textSecondary}
+                                value={customMatchTeamA}
+                                onChangeText={setCustomMatchTeamA}
+                            />
+                        </View>
+                        <View style={styles.modalInputRow}>
+                            <Text style={styles.modalLabel}>Team B ID or Exact Name</Text>
+                            <TextInput
+                                style={styles.modalInput}
+                                placeholder="e.g. Metro High"
+                                placeholderTextColor={colors.textSecondary}
+                                value={customMatchTeamB}
+                                onChangeText={setCustomMatchTeamB}
+                            />
+                        </View>
+                        
+                        <View style={styles.modalFooter}>
+                            <TouchableOpacity style={styles.modalBtn} onPress={() => setCustomMatchModalOpen(false)}>
+                                <Text style={styles.modalBtnText}>Cancel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={[styles.modalBtn, styles.modalBtnPrimary]} onPress={async () => {
+                                if (!customMatchTeamA.trim() || !customMatchTeamB.trim()) return;
+                                
+                                // Resolve name to ID if needed
+                                let tAId = customMatchTeamA.trim();
+                                let tBId = customMatchTeamB.trim();
+                                
+                                const pVals = Object.values(tournament.participants || {});
+                                const tA = pVals.find(p => p.id === tAId || p.name.toLowerCase() === tAId.toLowerCase());
+                                const tB = pVals.find(p => p.id === tBId || p.name.toLowerCase() === tBId.toLowerCase());
+                                
+                                if (!tA) { Alert.alert('Error', `Could not find team A: ${tAId}`); return; }
+                                if (!tB) { Alert.alert('Error', `Could not find team B: ${tBId}`); return; }
+
+                                try {
+                                    await TournamentService.addCustomMatch(tournament.id, tA.id, tB.id);
+                                    setCustomMatchTeamA('');
+                                    setCustomMatchTeamB('');
+                                    setCustomMatchModalOpen(false);
+                                } catch (e: any) {
+                                    Alert.alert('Error', e.message);
+                                }
+                            }}>
+                                <Text style={styles.modalBtnTextPrimary}>Add</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
+
+            <Modal visible={overrideMatchModalOpen} animationType="slide" transparent onRequestClose={() => setOverrideMatchModalOpen(false)}>
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalCard}>
+                        <Text style={styles.modalTitle}>Override Match Slot {overrideMatchSlot}</Text>
+                        <Text style={styles.modalSubtitle}>Manually set which team advances into this slot.</Text>
+                        
+                        <View style={styles.modalInputRow}>
+                            <Text style={styles.modalLabel}>Team ID or Exact Name</Text>
+                            <TextInput
+                                style={styles.modalInput}
+                                placeholder="e.g. River City"
+                                placeholderTextColor={colors.textSecondary}
+                                value={overrideMatchTeamName}
+                                onChangeText={setOverrideMatchTeamName}
+                            />
+                        </View>
+                        
+                        <View style={styles.modalFooter}>
+                            <TouchableOpacity style={styles.modalBtn} onPress={() => { setOverrideMatchModalOpen(false); setMatchEditorOpen(true); }}>
+                                <Text style={styles.modalBtnText}>Cancel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={[styles.modalBtn, styles.modalBtnPrimary]} onPress={async () => {
+                                if (!overrideMatchTeamName.trim()) return;
+                                
+                                let tName = overrideMatchTeamName.trim();
+                                const pVals = Object.values(tournament.participants || {});
+                                const t = pVals.find(p => p.id === tName || p.name.toLowerCase() === tName.toLowerCase());
+                                
+                                if (!t && tName.toUpperCase() !== 'BYE') { 
+                                    Alert.alert('Error', `Could not find team: ${tName}. You can type BYE if you want a bye.`); 
+                                    return; 
+                                }
+
+                                try {
+                                    await TournamentService.overrideBracketMatch(tournament.id, editingMatchId, overrideMatchSlot, t ? t.id : 'BYE');
+                                    setOverrideMatchTeamName('');
+                                    setOverrideMatchModalOpen(false);
+                                } catch (e: any) {
+                                    Alert.alert('Error', e.message);
+                                }
+                            }}>
+                                <Text style={styles.modalBtnTextPrimary}>Override</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
         </View>
     );
 }
@@ -782,12 +1264,12 @@ const getStyles = (colors: ThemeColors) => {
         },
         // Hero Header (Esports Style)
         heroHeader: {
-            backgroundColor: '#0F172A', // Deep navy/black to anchor the esports vibe regardless of theme
-            paddingTop: 50,
+            backgroundColor: '#1B2838',
             paddingHorizontal: 20,
-            paddingBottom: 24,
-            borderBottomWidth: 1,
-            borderBottomColor: '#1E293B',
+            paddingBottom: 20,
+            borderBottomWidth: 0,
+            borderBottomColor: 'transparent',
+            zIndex: 10,
         },
         heroTopRow: {
             flexDirection: 'row',
@@ -823,7 +1305,7 @@ const getStyles = (colors: ThemeColors) => {
         },
         heroSubtitle: {
             ...Typography.body,
-            color: '#94A3B8',
+            color: 'rgba(255,255,255,0.65)',
         },
         // Tab Bar
         tabBar: {

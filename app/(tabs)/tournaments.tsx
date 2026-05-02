@@ -6,6 +6,7 @@ import { auth } from '../../firebaseConfig';
 import { TeamService } from '../services/TeamService';
 import { TournamentDirectoryItem, TournamentService } from '../services/TournamentService';
 import { Team, Tournament, TournamentEngine, TournamentEnrollmentMode, TournamentPrivacy, TournamentSeeding } from '../services/types';
+import { TOURNAMENT_TEMPLATES, TournamentTemplate } from '../services/tournamentTemplates';
 import { getTypography, Layout } from '../theme/DesignSystem';
 import { ThemeColors, useTheme } from '../theme/ThemeContext';
 
@@ -68,6 +69,7 @@ export default function TournamentsTabScreen() {
     const [formError, setFormError] = useState('');
     const [isSaving, setIsSaving] = useState(false);
     const [isResolvingCode, setIsResolvingCode] = useState(false);
+    const [selectedTemplate, setSelectedTemplate] = useState<string>('custom');
     const modalAnim = useRef(new Animated.Value(0)).current;
 
     useEffect(() => {
@@ -126,6 +128,15 @@ export default function TournamentsTabScreen() {
         setParticipantsInput('');
         setActiveHelpKey(null);
         setFormError('');
+        setSelectedTemplate('custom');
+    };
+
+    const applyTemplate = (templateId: string) => {
+        setSelectedTemplate(templateId);
+        const template = TOURNAMENT_TEMPLATES.find(t => t.id === templateId);
+        if (!template) return;
+        setEngine(template.config.engine);
+        setIncludeConsolation(template.config.includeConsolation);
     };
 
     const closeCreateModal = () => {
@@ -182,6 +193,29 @@ export default function TournamentsTabScreen() {
                 },
                 user.uid
             );
+
+            // Apply template config if one was selected
+            const template = TOURNAMENT_TEMPLATES.find(t => t.id === selectedTemplate);
+            if (template && template.id !== 'custom') {
+                const cfg = template.config;
+                if (cfg.poolCount || cfg.poolSize || cfg.qualifiersPerPool || cfg.poolFormat) {
+                    await TournamentService.updatePoolConfig(tournamentId, {
+                        poolCount: cfg.poolCount,
+                        poolSize: cfg.poolSize,
+                        qualifiersPerPool: cfg.qualifiersPerPool,
+                        poolFormat: cfg.poolFormat,
+                    });
+                }
+                await TournamentService.updateBracketConfig(tournamentId, {
+                    bracketFormat: cfg.bracketFormat,
+                    includeConsolation: cfg.includeConsolation,
+                    includeThirdPlace: cfg.includeThirdPlace,
+                    crossoverEnabled: cfg.crossoverEnabled,
+                });
+                if (cfg.scheduleDays) {
+                    await TournamentService.updateScheduleDays(tournamentId, cfg.scheduleDays);
+                }
+            }
 
             setModalVisible(false);
             modalAnim.setValue(0);
@@ -399,8 +433,30 @@ export default function TournamentsTabScreen() {
                     >
                         <Text style={styles.modalTitle}>Create Tournament</Text>
 
-                        <ScrollView style={{ width: '100%' }} contentContainerStyle={{ paddingBottom: 6 }}>
+                        {/* Template Selector */}
+                        <View style={{ marginBottom: 8 }}>
+                            <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '600', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>Choose a Template</Text>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingRight: 8 }}>
+                                {TOURNAMENT_TEMPLATES.map(t => (
+                                    <TouchableOpacity
+                                        key={t.id}
+                                        style={{
+                                            width: 130, paddingVertical: 14, paddingHorizontal: 12, borderRadius: 14,
+                                            backgroundColor: selectedTemplate === t.id ? t.color + '18' : colors.surfaceSecondary,
+                                            borderWidth: 2, borderColor: selectedTemplate === t.id ? t.color : colors.border,
+                                            alignItems: 'center', gap: 6,
+                                        }}
+                                        onPress={() => applyTemplate(t.id)}
+                                    >
+                                        <Ionicons name={t.icon as any} size={22} color={selectedTemplate === t.id ? t.color : colors.textSecondary} />
+                                        <Text style={{ fontSize: 12, fontWeight: '700', color: selectedTemplate === t.id ? colors.text : colors.textSecondary, textAlign: 'center' }}>{t.name}</Text>
+                                        <Text style={{ fontSize: 9, color: colors.textSecondary, textAlign: 'center', lineHeight: 12 }} numberOfLines={2}>{t.description}</Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </ScrollView>
+                        </View>
 
+                        <ScrollView style={{ width: '100%' }} contentContainerStyle={{ paddingBottom: 6 }}>
 
                             <View style={styles.sectionBlock}>
                                 {renderSectionLabel('Tournament Name', 'tournamentName')}
@@ -471,7 +527,7 @@ export default function TournamentsTabScreen() {
                                     style={[styles.input, styles.multilineInput]}
                                     multiline
                                     textAlignVertical="top"
-                                    placeholder="Team 1\nTeam 2, 1765\nTeam 3"
+                                    placeholder={"Team 1\nTeam 2, 1765\nTeam 3"}
                                     placeholderTextColor={colors.textSecondary}
                                     value={participantsInput}
                                     onChangeText={setParticipantsInput}
