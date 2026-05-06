@@ -3,11 +3,15 @@ import * as ImagePicker from 'expo-image-picker';
 import { router } from 'expo-router';
 import { signOut, updatePassword, updateProfile } from 'firebase/auth';
 import { onValue, ref, update } from 'firebase/database';
-import React, { useEffect, useState } from 'react';
-import { Alert, Image, Linking, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, Image, Linking, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { auth, db } from '../../firebaseConfig';
 import ImageCropperModal from '../../src/components/ImageCropperModal';
+import DemoPresentationMenuModal from '../components/DemoPresentationMenuModal';
+import DemoWalkthroughModal from '../components/DemoWalkthroughModal';
 import { AccountService } from '../services/AccountService';
+import { resolveDemoTourTeamIds } from '../services/demoTourTeamIds';
+import { DemoModeService } from '../services/DemoModeService';
 import { ensureHttps, isHttpUrl, isVerifiedSocialLink, validateSocialExternalUrl } from '../services/linkUtils';
 import { NotificationService } from '../services/NotificationService';
 import { TeamService } from '../services/TeamService';
@@ -45,6 +49,12 @@ export default function ProfileScreen() {
     } | null>(null);
 
     const [themeModalVisible, setThemeModalVisible] = useState(false);
+    const [demoWalkthroughVisible, setDemoWalkthroughVisible] = useState(false);
+    const [demoMenuVisible, setDemoMenuVisible] = useState(false);
+    const [demoPackInstalled, setDemoPackInstalled] = useState(false);
+    const [demoTourTeams, setDemoTourTeams] = useState<{ u: string; follow: string } | null>(null);
+    const [demoSeeding, setDemoSeeding] = useState(false);
+    const [isRemovingDemo, setIsRemovingDemo] = useState(false);
     const { colors, themePref, setThemePref } = useTheme();
     const styles = getStyles(colors);
 
@@ -71,6 +81,12 @@ export default function ProfileScreen() {
                 setProfileSocial(nextPublic.socialLinks || {});
                 const fallbackName = (user.displayName || user.email?.split('@')[0] || '').trim();
                 setDisplayName((data.displayName || fallbackName).trim());
+                setDemoPackInstalled(!!data.demoSamplePackV1);
+                if (data.demoUniversityIowaTeamId && data.demoIowaStateTeamId) {
+                    setDemoTourTeams({ u: data.demoUniversityIowaTeamId, follow: data.demoIowaStateTeamId });
+                } else {
+                    setDemoTourTeams(null);
+                }
             }
         });
 
@@ -262,6 +278,60 @@ export default function ProfileScreen() {
         Alert.alert('Support', 'Email support@realultimate.app for help or feedback.');
     };
 
+    const resolvedTourIds = useMemo(() => resolveDemoTourTeamIds(demoTourTeams, teams), [demoTourTeams, teams]);
+
+    const runDemoSeed = async (force: boolean): Promise<boolean> => {
+        if (!user) return false;
+        setDemoSeeding(true);
+        try {
+            const name = (displayName || user.displayName || user.email?.split('@')[0] || 'Coach').trim();
+            const result = await DemoModeService.seedDemoWorld(user.uid, user.email || '', name, { force });
+            setDemoTourTeams({ u: result.universityIowaTeamId, follow: result.iowaStateTeamId });
+            setDemoPackInstalled(true);
+            setDemoWalkthroughVisible(true);
+            return true;
+        } catch (e: any) {
+            Alert.alert('Demo unavailable', e?.message || 'Please try again.');
+            return false;
+        } finally {
+            setDemoSeeding(false);
+        }
+    };
+
+    const handleRemoveDemoPack = () => {
+        if (!user) return;
+        Alert.alert(
+            'Remove Iowa demo data?',
+            'This deletes the University of Iowa and Iowa State sample teams, their finished games, schedules, and demo profile flags. You cannot undo this.',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Remove',
+                    style: 'destructive',
+                    onPress: () => {
+                        void (async () => {
+                            setIsRemovingDemo(true);
+                            try {
+                                await DemoModeService.removeDemoPack(user.uid);
+                                setDemoTourTeams(null);
+                                setDemoPackInstalled(false);
+                                Alert.alert('Demo removed', 'Sample teams and data were deleted.');
+                            } catch (e: any) {
+                                Alert.alert('Could not remove demo', e?.message || 'Try again.');
+                            } finally {
+                                setIsRemovingDemo(false);
+                            }
+                        })();
+                    },
+                },
+            ]
+        );
+    };
+
+    const handleOpenDemoTour = () => {
+        setDemoWalkthroughVisible(true);
+    };
+
     const activeTeam = teams.find(t => t.id === activeTeamId);
     const publicSocialEntries = [
         { key: 'x', label: 'X', url: publicProfile.socialLinks?.x || '' },
@@ -278,6 +348,66 @@ export default function ProfileScreen() {
             </View>
 
             <View style={styles.mainContent}>
+                {user && (
+                    <>
+                        <Text style={[styles.sectionTitle, { marginBottom: 10 }]}>Demo Presentation - Modern Marvels</Text>
+                        <View style={[styles.optionsContainer, styles.demoPresentationCard]}>
+                            <TouchableOpacity
+                                style={styles.optionRow}
+                                activeOpacity={0.7}
+                                onPress={handleOpenDemoTour}
+                            >
+                                <Ionicons name="map-outline" size={24} color={colors.primary} />
+                                <View style={{ flex: 1, marginLeft: 16 }}>
+                                    <Text style={styles.optionText}>Open demo tour</Text>
+                                    <Text style={styles.subText}>Guided walkthrough: teams, recorder, history.</Text>
+                                </View>
+                                <Ionicons name="chevron-forward" size={20} color={colors.border} />
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.optionRow, { borderBottomWidth: demoPackInstalled ? 1 : 0 }]}
+                                activeOpacity={0.7}
+                                onPress={() => setDemoMenuVisible(true)}
+                                disabled={demoSeeding}
+                            >
+                                <Ionicons name="school-outline" size={24} color={colors.textSecondary} />
+                                <View style={{ flex: 1, marginLeft: 16 }}>
+                                    <Text style={styles.optionText}>Load Iowa sample data</Text>
+                                    <Text style={styles.subText}>
+                                        {demoPackInstalled
+                                            ? 'Optional: add another showcase pair, or use Open tour above.'
+                                            : 'Two teams, rosters, finished games, and a scheduled match.'}
+                                    </Text>
+                                </View>
+                                {demoSeeding ? (
+                                    <ActivityIndicator color={colors.primary} />
+                                ) : (
+                                    <Ionicons name="chevron-forward" size={20} color={colors.border} />
+                                )}
+                            </TouchableOpacity>
+                            {demoPackInstalled && (
+                                <TouchableOpacity
+                                    style={[styles.optionRow, { borderBottomWidth: 0 }]}
+                                    activeOpacity={0.7}
+                                    onPress={handleRemoveDemoPack}
+                                    disabled={isRemovingDemo || demoSeeding}
+                                >
+                                    <Ionicons name="trash-outline" size={24} color={colors.error} />
+                                    <View style={{ flex: 1, marginLeft: 16 }}>
+                                        <Text style={[styles.optionText, { color: colors.error }]}>Remove Iowa demo data</Text>
+                                        <Text style={styles.subText}>Deletes sample teams, games, schedules, and demo flags.</Text>
+                                    </View>
+                                    {isRemovingDemo ? (
+                                        <ActivityIndicator color={colors.error} />
+                                    ) : (
+                                        <Ionicons name="chevron-forward" size={20} color={colors.border} />
+                                    )}
+                                </TouchableOpacity>
+                            )}
+                        </View>
+                    </>
+                )}
+
                 <View style={styles.header}>
                     <View style={styles.profileBannerWrap}>
                         {publicProfile.bannerUrl ? (
@@ -423,6 +553,28 @@ export default function ProfileScreen() {
                     <Text style={styles.logoutText}>Log Out</Text>
                 </TouchableOpacity>
             </View>
+
+            <DemoPresentationMenuModal
+                visible={demoMenuVisible}
+                onClose={() => setDemoMenuVisible(false)}
+                demoPackInstalled={demoPackInstalled}
+                isSeeding={demoSeeding}
+                onOpenTour={() => setDemoWalkthroughVisible(true)}
+                onLoadSampleData={async () => {
+                    const ok = await runDemoSeed(false);
+                    if (ok) setDemoMenuVisible(false);
+                }}
+                onAddAnotherSet={async () => {
+                    const ok = await runDemoSeed(true);
+                    if (ok) setDemoMenuVisible(false);
+                }}
+            />
+            <DemoWalkthroughModal
+                visible={demoWalkthroughVisible}
+                onClose={() => setDemoWalkthroughVisible(false)}
+                universityIowaTeamId={resolvedTourIds.u}
+                followTeamId={resolvedTourIds.follow}
+            />
 
             {/* PUSH NOTIFICATIONS MODAL */}
             <Modal visible={pushModalVisible} animationType="fade" transparent={true} onRequestClose={() => setPushModalVisible(false)}>
@@ -745,6 +897,12 @@ const getStyles = (colors: ThemeColors) => {
         roleText: { ...Typography.bodySmall, color: colors.primary, fontWeight: '600' },
         
         sectionTitle: { ...Typography.label, marginBottom: 12 },
+
+        demoPresentationCard: {
+            borderWidth: 1.5,
+            borderColor: colors.primary,
+            marginBottom: 28,
+        },
         
         emptyStateCard: { padding: 24, backgroundColor: colors.surface, borderRadius: Layout.radiusLg, alignItems: 'center', borderWidth: 1, borderColor: colors.border, borderStyle: 'dashed', marginBottom: 32 },
         emptyText: { ...Typography.bodySmall, textAlign: 'center' },

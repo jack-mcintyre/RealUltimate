@@ -1,10 +1,13 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import * as Clipboard from 'expo-clipboard';
 import { router, useLocalSearchParams } from 'expo-router';
+import { onValue, ref } from 'firebase/database';
 import React, { useEffect, useState } from 'react';
 import { Alert, Image, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { auth } from '../../firebaseConfig';
+import { auth, db } from '../../firebaseConfig';
+import DemoTeamPageHintModal from '../components/DemoTeamPageHintModal';
 import { GameService } from '../services/GameService';
 import { ensureHttps, getHostname, validateExternalUrl, validateSocialExternalUrl } from '../services/linkUtils';
 import { sanitizeAvailability, validateScheduledGameDraft } from '../services/scheduleValidation';
@@ -136,6 +139,53 @@ export default function TeamDashboardScreen() {
     const { isDark, colors } = useTheme();
     const styles = getStyles(colors);
     const currentUserId = auth.currentUser?.uid || '';
+    const [demoProfileIds, setDemoProfileIds] = useState<{
+        pack: boolean;
+        coachTeamId: string | null;
+        followTeamId: string | null;
+    }>({ pack: false, coachTeamId: null, followTeamId: null });
+    const [demoTeamHintVisible, setDemoTeamHintVisible] = useState(false);
+
+    useEffect(() => {
+        if (!currentUserId) {
+            setDemoProfileIds({ pack: false, coachTeamId: null, followTeamId: null });
+            return;
+        }
+        const profileRef = ref(db, `users/${currentUserId}/profile`);
+        return onValue(profileRef, (snap) => {
+            const d = snap.val();
+            if (!d) {
+                setDemoProfileIds({ pack: false, coachTeamId: null, followTeamId: null });
+                return;
+            }
+            setDemoProfileIds({
+                pack: !!d.demoSamplePackV1,
+                coachTeamId: typeof d.demoUniversityIowaTeamId === 'string' ? d.demoUniversityIowaTeamId : null,
+                followTeamId: typeof d.demoIowaStateTeamId === 'string' ? d.demoIowaStateTeamId : null,
+            });
+        });
+    }, [currentUserId]);
+
+    useEffect(() => {
+        if (!id || !team || !demoProfileIds.pack) {
+            setDemoTeamHintVisible(false);
+            return;
+        }
+        const variant =
+            id === demoProfileIds.coachTeamId ? 'coach' : id === demoProfileIds.followTeamId ? 'follow' : null;
+        if (!variant) {
+            setDemoTeamHintVisible(false);
+            return;
+        }
+        const key = `realultimate.demoTeamPageHint.v3.${id}`;
+        let cancelled = false;
+        AsyncStorage.getItem(key).then((seen) => {
+            if (!cancelled && !seen) setDemoTeamHintVisible(true);
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [id, team, demoProfileIds.pack, demoProfileIds.coachTeamId, demoProfileIds.followTeamId]);
 
     useEffect(() => {
         if (!id) return;
@@ -193,7 +243,10 @@ export default function TeamDashboardScreen() {
             return;
         }
 
-        const canEdit = currentUserId === team.coachId || !!team.managers?.[currentUserId];
+        const isDemoPresentationFollowOnly =
+            demoProfileIds.pack && !!demoProfileIds.followTeamId && id === demoProfileIds.followTeamId;
+        const canEdit =
+            !isDemoPresentationFollowOnly && (currentUserId === team.coachId || !!team.managers?.[currentUserId]);
         if (!canEdit) {
             setJoinCodes(null);
             return;
@@ -202,7 +255,7 @@ export default function TeamDashboardScreen() {
         return TeamService.subscribeToTeamJoinCodes(id, (codes) => {
             setJoinCodes(codes);
         });
-    }, [id, preview, team, currentUserId]);
+    }, [id, preview, team, currentUserId, demoProfileIds.pack, demoProfileIds.followTeamId]);
 
     const handleScheduleDateChange = (_event: DateTimePickerEvent, selected?: Date) => {
         if (Platform.OS === 'android') setShowDatePicker(false);
@@ -354,6 +407,16 @@ export default function TeamDashboardScreen() {
         }
     };
 
+    const dismissDemoTeamHint = async () => {
+        if (!id) return;
+        setDemoTeamHintVisible(false);
+        try {
+            await AsyncStorage.setItem(`realultimate.demoTeamPageHint.v3.${id}`, '1');
+        } catch {
+            /* ignore */
+        }
+    };
+
     const handleOpenSocialExternal = async (platform: keyof SocialLinks, url: string) => {
         const validated = validateSocialExternalUrl(platform, url);
         if (!validated.ok) {
@@ -493,8 +556,10 @@ export default function TeamDashboardScreen() {
     if (!team) return <View style={styles.centerContainer}><Text style={styles.loadingText}>Loading Team...</Text></View>;
 
     const isPreviewPublic = preview === 'public';
-    const isCoach = currentUserId === team.coachId && !isPreviewPublic;
-    const isManager = !!team.managers?.[currentUserId] && !isPreviewPublic;
+    const isDemoPresentationFollowOnly =
+        demoProfileIds.pack && !!demoProfileIds.followTeamId && id === demoProfileIds.followTeamId;
+    const isCoach = currentUserId === team.coachId && !isPreviewPublic && !isDemoPresentationFollowOnly;
+    const isManager = !!team.managers?.[currentUserId] && !isPreviewPublic && !isDemoPresentationFollowOnly;
     const canEditTeamPage = isCoach || isManager;
 
     const pageConfig = team.pageConfig || {};
@@ -838,6 +903,15 @@ export default function TeamDashboardScreen() {
                 <View style={styles.previewModePill}>
                     <Ionicons name="eye-outline" size={13} color={colors.primary} />
                     <Text style={styles.previewModeText}>Public Preview Mode</Text>
+                </View>
+            )}
+
+            {isDemoPresentationFollowOnly && !isPreviewPublic && (
+                <View style={styles.presentationFollowPill}>
+                    <Ionicons name="heart-outline" size={13} color={colors.primary} />
+                    <Text style={styles.presentationFollowText}>
+                        Demo: fan / follow view — roster & history, no coach tools
+                    </Text>
                 </View>
             )}
 
@@ -1714,6 +1788,12 @@ export default function TeamDashboardScreen() {
                 </View>
             )}
 
+            <DemoTeamPageHintModal
+                visible={demoTeamHintVisible}
+                variant={id === demoProfileIds.coachTeamId ? 'coach' : 'follow'}
+                teamName={team.name}
+                onDismiss={dismissDemoTeamHint}
+            />
         </View>
     );
 }
@@ -1754,6 +1834,24 @@ const getStyles = (colors: ThemeColors) => {
             zIndex: 3,
         },
         previewModeText: { ...Typography.bodySmall, color: colors.primary, fontWeight: '700' },
+
+        presentationFollowPill: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+            alignSelf: 'stretch',
+            marginHorizontal: Layout.padding,
+            marginTop: 8,
+            marginBottom: 4,
+            backgroundColor: colors.primaryLight,
+            borderRadius: Layout.radiusMd,
+            borderWidth: 1,
+            borderColor: colors.primary,
+            paddingHorizontal: 12,
+            paddingVertical: 8,
+            zIndex: 3,
+        },
+        presentationFollowText: { ...Typography.bodySmall, color: colors.primary, fontWeight: '600', flex: 1 },
 
         mainContent: { flex: 1 },
         mainContentContainer: { paddingHorizontal: Layout.padding, paddingTop: 24, paddingBottom: 60 },

@@ -4,9 +4,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import { router } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Image, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { auth } from '../../firebaseConfig';
+import { Alert, ActivityIndicator, Image, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { onValue, ref } from 'firebase/database';
+import { auth, db } from '../../firebaseConfig';
+import DemoPresentationMenuModal from '../components/DemoPresentationMenuModal';
+import DemoWalkthroughModal from '../components/DemoWalkthroughModal';
 import TactilePressable from '../components/TactilePressable';
+import { DemoModeService } from '../services/DemoModeService';
+import { resolveDemoTourTeamIds } from '../services/demoTourTeamIds';
 import { GameService } from '../services/GameService';
 import { sanitizeAvailability, validateScheduledGameDraft } from '../services/scheduleValidation';
 import { TeamService } from '../services/TeamService';
@@ -109,11 +114,26 @@ export default function TeamsHubScreen() {
     const [isSavingSchedule, setIsSavingSchedule] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [showLaunchGuide, setShowLaunchGuide] = useState(false);
+    const [demoWalkthroughVisible, setDemoWalkthroughVisible] = useState(false);
+    const [demoMenuVisible, setDemoMenuVisible] = useState(false);
+    const [demoPackInstalled, setDemoPackInstalled] = useState(false);
+    const [demoTourTeams, setDemoTourTeams] = useState<{ u: string; follow: string } | null>(null);
+    const [demoSeeding, setDemoSeeding] = useState(false);
 
     const { isDark, colors } = useTheme();
     const styles = getStyles(colors);
 
     const user = auth.currentUser;
+
+    const teamsForDemoResolve = useMemo(
+        () => [...coachedTeams, ...spectatedTeams],
+        [coachedTeams, spectatedTeams]
+    );
+    const resolvedTourIds = useMemo(
+        () => resolveDemoTourTeamIds(demoTourTeams, teamsForDemoResolve),
+        [demoTourTeams, teamsForDemoResolve]
+    );
+
     const scheduledGames = useMemo(
         () => Object.values(scheduledGamesByTeam).flat().sort((a, b) => {
             const aTime = typeof a.scheduledAt === 'number' ? a.scheduledAt : Number.MAX_SAFE_INTEGER;
@@ -154,6 +174,30 @@ export default function TeamsHubScreen() {
         });
         return () => unsubscribe();
     }, [user]);
+
+    useEffect(() => {
+        if (!user?.uid) {
+            setDemoPackInstalled(false);
+            setDemoTourTeams(null);
+            return;
+        }
+        const profileRef = ref(db, `users/${user.uid}/profile`);
+        const unsub = onValue(profileRef, (snap) => {
+            const data = snap.val();
+            if (!data) {
+                setDemoPackInstalled(false);
+                setDemoTourTeams(null);
+                return;
+            }
+            setDemoPackInstalled(!!data.demoSamplePackV1);
+            if (data.demoUniversityIowaTeamId && data.demoIowaStateTeamId) {
+                setDemoTourTeams({ u: data.demoUniversityIowaTeamId, follow: data.demoIowaStateTeamId });
+            } else {
+                setDemoTourTeams(null);
+            }
+        });
+        return () => unsub();
+    }, [user?.uid]);
 
     useEffect(() => {
         if (!user?.uid) return;
@@ -463,6 +507,24 @@ export default function TeamsHubScreen() {
         await AsyncStorage.setItem('realultimate.launchGuideSeen.v1', 'true').catch(() => {});
     };
 
+    const runDemoSeed = async (force: boolean): Promise<boolean> => {
+        if (!user) return false;
+        setDemoSeeding(true);
+        try {
+            const name = (user.displayName || user.email?.split('@')[0] || 'Coach').trim();
+            const result = await DemoModeService.seedDemoWorld(user.uid, user.email || '', name, { force });
+            setDemoTourTeams({ u: result.universityIowaTeamId, follow: result.iowaStateTeamId });
+            setDemoPackInstalled(true);
+            setDemoWalkthroughVisible(true);
+            return true;
+        } catch (e: any) {
+            Alert.alert('Demo unavailable', e?.message || 'Please try again.');
+            return false;
+        } finally {
+            setDemoSeeding(false);
+        }
+    };
+
     return (
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.container}>
             <Modal visible={showLaunchGuide} animationType="fade" transparent onRequestClose={dismissLaunchGuide}>
@@ -496,6 +558,26 @@ export default function TeamsHubScreen() {
                     <Text style={styles.pageTitle}>Teams</Text>
                     <Text style={styles.pageSubtitle}>Manage your teams and live games</Text>
                 </View>
+
+                {user && (
+                    <TouchableOpacity
+                        style={[styles.demoTeamsBanner, demoSeeding && { opacity: 0.75 }]}
+                        onPress={() => setDemoMenuVisible(true)}
+                        activeOpacity={0.88}
+                        disabled={demoSeeding}
+                    >
+                        <Ionicons name="school-outline" size={22} color={colors.primary} />
+                        <View style={{ flex: 1, marginLeft: 12 }}>
+                            <Text style={styles.demoTeamsBannerTitle}>Demo Presentation - Modern Marvels</Text>
+                            <Text style={styles.demoTeamsBannerSub}>Tap for tour and sample data options</Text>
+                        </View>
+                        {demoSeeding ? (
+                            <ActivityIndicator color={colors.primary} />
+                        ) : (
+                            <Ionicons name="chevron-forward" size={20} color={colors.border} />
+                        )}
+                    </TouchableOpacity>
+                )}
 
                 {/* CREATE / JOIN FORMS */}
                 {teamMode === 'create' && (
@@ -1184,6 +1266,31 @@ export default function TeamsHubScreen() {
                     </View>
                 </View>
             </Modal>
+            {user && (
+                <>
+                    <DemoPresentationMenuModal
+                        visible={demoMenuVisible}
+                        onClose={() => setDemoMenuVisible(false)}
+                        demoPackInstalled={demoPackInstalled}
+                        isSeeding={demoSeeding}
+                        onOpenTour={() => setDemoWalkthroughVisible(true)}
+                        onLoadSampleData={async () => {
+                            const ok = await runDemoSeed(false);
+                            if (ok) setDemoMenuVisible(false);
+                        }}
+                        onAddAnotherSet={async () => {
+                            const ok = await runDemoSeed(true);
+                            if (ok) setDemoMenuVisible(false);
+                        }}
+                    />
+                    <DemoWalkthroughModal
+                        visible={demoWalkthroughVisible}
+                        onClose={() => setDemoWalkthroughVisible(false)}
+                        universityIowaTeamId={resolvedTourIds.u}
+                        followTeamId={resolvedTourIds.follow}
+                    />
+                </>
+            )}
         </KeyboardAvoidingView>
     );
 }
@@ -1203,6 +1310,20 @@ const getStyles = (colors: ThemeColors) => {
         pageHeader: { marginBottom: 24 },
         pageTitle: { ...Typography.title, fontSize: 28 },
         pageSubtitle: { ...Typography.subtitle, marginTop: 4 },
+
+        demoTeamsBanner: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            backgroundColor: colors.surface,
+            borderRadius: Layout.radiusLg,
+            padding: 14,
+            marginBottom: 20,
+            borderWidth: 1.5,
+            borderColor: colors.primary,
+            ...Layout.shadow,
+        },
+        demoTeamsBannerTitle: { ...Typography.body, fontWeight: '700', color: colors.text },
+        demoTeamsBannerSub: { ...Typography.bodySmall, color: colors.textSecondary, marginTop: 2 },
 
         sectionContainer: { marginBottom: 32 },
         sectionHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },

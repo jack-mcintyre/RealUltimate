@@ -24,6 +24,14 @@ function rosterSnapFromPlayers(
     );
 }
 
+/** Build opponent roster snapshot from an ordered player list (e.g. demo games). */
+export function rosterSnapshotFromPlayerList(
+    players: Player[]
+): Record<string, Pick<Player, 'id' | 'name' | 'number' | 'teamId' | 'primaryLine' | 'position'>> {
+    const map = Object.fromEntries(players.map((p) => [p.id, p])) as Record<string, Player>;
+    return rosterSnapFromPlayers(map);
+}
+
 /**
  * 180° rotate around the field center. Used by the recorder to translate
  * between display coords (what the operator sees with the field flipped)

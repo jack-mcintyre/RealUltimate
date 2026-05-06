@@ -8,6 +8,12 @@
     "scheme": "realultimate",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "updates": {
+      "url": "https://u.expo.dev/502906e7-7eb5-4009-8d61-5685b724dc4f"
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.jacmcintyre.RealUltimate",

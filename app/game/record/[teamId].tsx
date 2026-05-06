@@ -1,11 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router, useLocalSearchParams } from 'expo-router';
+import { onValue, ref } from 'firebase/database';
 import * as Haptics from 'expo-haptics';
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Animated, KeyboardAvoidingView, Modal, Platform, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, View } from 'react-native';
-import { auth } from '../../../firebaseConfig';
+import { auth, db } from '../../../firebaseConfig';
 import BrandedDialog from '../../../src/components/BrandedDialog';
+import DemoRecorderStartModal from '../../components/DemoRecorderStartModal';
 import HalftimeTimerModal from '../../components/HalftimeTimerModal';
 import { useGame } from '../../hooks/useGame';
 import { flipFieldCoord, GameService } from '../../services/GameService';
@@ -428,6 +430,14 @@ export default function RecorderScreen() {
 
     const isDualObserverPortal = teamId === 'dual_observer';
     const resolvedDualGameId = typeof dualGameIdParam === 'string' ? dualGameIdParam : Array.isArray(dualGameIdParam) ? dualGameIdParam[0] : '';
+    const resolvedPrefOpponentTeamId =
+        typeof prefOpponentTeamId === 'string'
+            ? prefOpponentTeamId
+            : Array.isArray(prefOpponentTeamId)
+              ? prefOpponentTeamId[0]
+              : '';
+    const resolvedScheduledGameId =
+        typeof scheduledGameId === 'string' ? scheduledGameId : Array.isArray(scheduledGameId) ? scheduledGameId[0] : '';
 
     const [ourTeam, setOurTeam] = useState<Team | null>(null);
     const [dualTeam1, setDualTeam1] = useState<Team | null>(null);
@@ -494,6 +504,15 @@ export default function RecorderScreen() {
     const isObserverRecording = gameState.recordingLockOwner === 'observer' && !!gameState.delegatedRecorderUid;
     const isCoachViewLockedByObserver = isObserverRecording && !isActiveRecorder;
     const hasAppliedPrefillRef = useRef(false);
+    const demoOpponentAutoFilledRef = useRef(false);
+
+    const [demoPackProfile, setDemoPackProfile] = useState<{
+        pack: boolean;
+        coachId: string | null;
+        followId: string | null;
+    }>({ pack: false, coachId: null, followId: null });
+    const [showDemoRecorderStartModal, setShowDemoRecorderStartModal] = useState(false);
+    const [demoSetupGuideExpanded, setDemoSetupGuideExpanded] = useState(true);
 
     const selectedOpponentTeam = selectedOpponentTeamId
         ? allTeams.find((team) => team.id === selectedOpponentTeamId) || null
@@ -638,8 +657,28 @@ export default function RecorderScreen() {
     }, []);
 
     useEffect(() => {
+        if (!currentUserId) {
+            setDemoPackProfile({ pack: false, coachId: null, followId: null });
+            return;
+        }
+        const profileRef = ref(db, `users/${currentUserId}/profile`);
+        return onValue(profileRef, (snap) => {
+            const d = snap.val();
+            if (!d) {
+                setDemoPackProfile({ pack: false, coachId: null, followId: null });
+                return;
+            }
+            setDemoPackProfile({
+                pack: !!d.demoSamplePackV1,
+                coachId: typeof d.demoUniversityIowaTeamId === 'string' ? d.demoUniversityIowaTeamId : null,
+                followId: typeof d.demoIowaStateTeamId === 'string' ? d.demoIowaStateTeamId : null,
+            });
+        });
+    }, [currentUserId]);
+
+    useEffect(() => {
         if (hasAppliedPrefillRef.current) return;
-        const hasPrefill = !!(prefOpponentName || prefLocation || prefOpponentTeamId);
+        const hasPrefill = !!(prefOpponentName || prefLocation || resolvedPrefOpponentTeamId);
         if (!hasPrefill) return;
 
         if (prefOpponentName) {
@@ -649,14 +688,38 @@ export default function RecorderScreen() {
             setGameLocationSetup(prefLocation);
         }
 
-        if (prefOpponentTeamId) {
-            setSelectedOpponentTeamId(prefOpponentTeamId);
+        if (resolvedPrefOpponentTeamId) {
+            setSelectedOpponentTeamId(resolvedPrefOpponentTeamId);
             setOpponentAccessCode('');
             setOpponentSearch('');
         }
 
         hasAppliedPrefillRef.current = true;
-    }, [prefOpponentName, prefLocation, prefOpponentTeamId]);
+    }, [prefOpponentName, prefLocation, resolvedPrefOpponentTeamId]);
+
+    useEffect(() => {
+        if (isDualObserverPortal || !teamId) return;
+        if (resolvedScheduledGameId) return;
+        if (resolvedPrefOpponentTeamId) return;
+        if (demoOpponentAutoFilledRef.current) return;
+        if (!demoPackProfile.pack || teamId !== demoPackProfile.coachId || !demoPackProfile.followId) return;
+        const opp = allTeams.find((t) => t.id === demoPackProfile.followId);
+        if (!opp) return;
+        setSelectedOpponentTeamId(demoPackProfile.followId);
+        setOpponentName(opp.name);
+        setOpponentSearch(opp.name);
+        setOpponentAccessCode('');
+        demoOpponentAutoFilledRef.current = true;
+    }, [
+        isDualObserverPortal,
+        teamId,
+        resolvedScheduledGameId,
+        resolvedPrefOpponentTeamId,
+        demoPackProfile.pack,
+        demoPackProfile.coachId,
+        demoPackProfile.followId,
+        allTeams,
+    ]);
 
     useEffect(() => {
         setInGameStreamUrl(gameState.streamUrl || '');
@@ -929,7 +992,7 @@ export default function RecorderScreen() {
         };
     }, [ourTeam?.id, isDualObserverPortal]);
 
-    const handleStartGame = async () => {
+    const executeStartGame = async () => {
         if (!ourTeam) return;
         const currentUser = auth.currentUser;
         if (!currentUser) {
@@ -1007,8 +1070,8 @@ export default function RecorderScreen() {
                 }
             );
 
-            if (scheduledGameId) {
-                await TeamService.removeScheduledGame(ourTeam.id, scheduledGameId, currentUser.uid);
+            if (resolvedScheduledGameId) {
+                await TeamService.removeScheduledGame(ourTeam.id, resolvedScheduledGameId, currentUser.uid);
             }
 
         } catch (e) {
@@ -1017,6 +1080,50 @@ export default function RecorderScreen() {
         } finally {
             setIsLoading(false);
         }
+    };
+
+    const handleStartGame = async () => {
+        if (!ourTeam) return;
+        const currentUser = auth.currentUser;
+        if (!currentUser) {
+            Alert.alert("Error", "You must be logged in to start a game.");
+            return;
+        }
+
+        const isDemoUni =
+            !isDualObserverPortal &&
+            demoPackProfile.pack &&
+            typeof teamId === 'string' &&
+            teamId === demoPackProfile.coachId;
+
+        if (isDemoUni) {
+            const key = `realultimate.demoRecorderStartTips.v1.${currentUser.uid}`;
+            const seen = await AsyncStorage.getItem(key);
+            if (!seen) {
+                setShowDemoRecorderStartModal(true);
+                return;
+            }
+        }
+
+        await executeStartGame();
+    };
+
+    const continueDemoRecorderAfterTips = async () => {
+        const currentUser = auth.currentUser;
+        if (!currentUser) return;
+        await AsyncStorage.setItem(`realultimate.demoRecorderStartTips.v1.${currentUser.uid}`, '1');
+        setShowDemoRecorderStartModal(false);
+        await executeStartGame();
+    };
+
+    const dismissDemoRecorderTips = () => {
+        setShowDemoRecorderStartModal(false);
+    };
+
+    const resetDemoRecorderTips = async () => {
+        if (!currentUserId) return;
+        await AsyncStorage.removeItem(`realultimate.demoRecorderStartTips.v1.${currentUserId}`);
+        Alert.alert('Recording tips', 'Tips will show again the next time you tap Commence Match.');
     };
 
     const confirmEndGame = () => {
@@ -1145,6 +1252,11 @@ export default function RecorderScreen() {
     const canLogOurDefense = !!selectedOurPlayerId;
     const actionLockedByPendingPass = !!pendingPassTargetId;
     const preGameIntel = !gameState.isGameActive && ourTeam ? buildLineAssistIntel(ourTeam, prepGames, lineupSize) : null;
+    const isDemoUniversityRecorder =
+        !isDualObserverPortal &&
+        demoPackProfile.pack &&
+        typeof teamId === 'string' &&
+        teamId === demoPackProfile.coachId;
     const elapsedGameSec = gameState.gameStartTimestamp ? Math.max(0, Math.floor((clockNow - gameState.gameStartTimestamp) / 1000)) : 0;
     const timeoutRemainingSec = gameState.activeTimeoutStartedAt
         ? Math.max(0, (gameState.timeoutDurationSec || 70) - Math.floor((clockNow - gameState.activeTimeoutStartedAt) / 1000))
@@ -1268,10 +1380,83 @@ export default function RecorderScreen() {
                             <Text style={styles.setupTitle}>Match Setup</Text>
                         </View>
 
-                        {!!scheduledGameId && (
+                        {!!resolvedScheduledGameId && (
                             <View style={styles.scheduledPrefillBanner}>
                                 <Ionicons name="calendar" size={18} color={colors.primary} />
                                 <Text style={styles.scheduledPrefillText}>Starting from scheduled game details.</Text>
+                            </View>
+                        )}
+
+                        {isDemoUniversityRecorder && (
+                            <View style={styles.demoRecorderBanner}>
+                                <Ionicons name="school-outline" size={18} color={colors.primary} />
+                                <Text style={styles.demoRecorderBannerText}>
+                                    Demo: you are recording for your sample coached team ({ourTeam?.name || 'University of Iowa'}). Opponent defaults to{' '}
+                                    <Text style={{ fontWeight: '800' }}>Iowa State</Text> — the team you follow in this showcase — so the flow matches a real
+                                    matchup. Change opponent anytime below.
+                                </Text>
+                            </View>
+                        )}
+
+                        {isDemoUniversityRecorder && (
+                            <View style={styles.demoGuideCard}>
+                                <TouchableOpacity
+                                    style={styles.demoGuideHeader}
+                                    onPress={() => setDemoSetupGuideExpanded((v) => !v)}
+                                    activeOpacity={0.75}
+                                >
+                                    <Ionicons name="information-circle-outline" size={20} color={colors.primary} />
+                                    <Text style={styles.demoGuideTitle}>What these setup options mean</Text>
+                                    <Ionicons
+                                        name={demoSetupGuideExpanded ? 'chevron-up' : 'chevron-down'}
+                                        size={18}
+                                        color={colors.textSecondary}
+                                        style={{ marginLeft: 'auto' }}
+                                    />
+                                </TouchableOpacity>
+                                {demoSetupGuideExpanded && (
+                                    <View style={styles.demoGuideBody}>
+                                        <Text style={styles.demoGuideBullet}>
+                                            • <Text style={styles.demoGuideEm}>Opponent search / code / guest name</Text> — Link a registered team for full
+                                            rosters and history, or type a guest name for a quick scrimmage.
+                                        </Text>
+                                        <Text style={styles.demoGuideBullet}>
+                                            • <Text style={styles.demoGuideEm}>Location & stream</Text> — Optional context on the game record and for fans.
+                                        </Text>
+                                        <Text style={styles.demoGuideBullet}>
+                                            • <Text style={styles.demoGuideEm}>Game limit (13/15)</Text> — Target score to win the game.
+                                        </Text>
+                                        <Text style={styles.demoGuideBullet}>
+                                            • <Text style={styles.demoGuideEm}>Starting pull (US / THEM)</Text> — Who receives the disc first (pull goes to the
+                                            other side).
+                                        </Text>
+                                        <Text style={styles.demoGuideBullet}>
+                                            • <Text style={styles.demoGuideEm}>Format & timers</Text> — Roster size (7v7 vs 5v5), soft/hard cap minutes, and
+                                            how long each timeout lasts.
+                                        </Text>
+                                        <Text style={styles.demoGuideBullet}>
+                                            • <Text style={styles.demoGuideEm}>Starting lineup</Text> — Who is on for point 1; you can change between points.
+                                        </Text>
+                                        <Text style={styles.demoGuideBullet}>
+                                            • <Text style={styles.demoGuideEm}>Line recommendation assistant</Text> — Suggestions from your recent tracked
+                                            games (not required to start).
+                                        </Text>
+                                        <Text style={styles.demoGuideBullet}>
+                                            • <Text style={styles.demoGuideEm}>Advanced tracking</Text> — Passes, possession time, and richer stats for your
+                                            team.
+                                        </Text>
+                                        <Text style={styles.demoGuideBullet}>
+                                            • <Text style={styles.demoGuideEm}>Observer mode</Text> — One device tracks both teams; needs a registered
+                                            opponent.
+                                        </Text>
+                                        <Text style={styles.demoGuideBullet}>
+                                            • <Text style={styles.demoGuideEm}>Field map</Text> — Tap-field positions on throws and key events.
+                                        </Text>
+                                        <Text style={styles.demoGuideBullet}>
+                                            • <Text style={styles.demoGuideEm}>Spirit score</Text> — WFDF-style ratings after the game when you finish.
+                                        </Text>
+                                    </View>
+                                )}
                             </View>
                         )}
 
@@ -1539,6 +1724,14 @@ export default function RecorderScreen() {
                             </View>
                             <Switch value={sotgEnabledSetup} onValueChange={setSotgEnabledSetup} trackColor={{ false: colors.border, true: colors.success }} />
                         </View>
+
+                        {isDemoUniversityRecorder && (
+                            <TouchableOpacity onPress={resetDemoRecorderTips} activeOpacity={0.7} style={{ marginBottom: 12, alignSelf: 'center' }}>
+                                <Text style={{ ...getTypography(colors).bodySmall, color: colors.primary, fontWeight: '700' }}>
+                                    Show recording tips again next time
+                                </Text>
+                            </TouchableOpacity>
+                        )}
 
                         <TouchableOpacity style={styles.startMatchBtn} onPress={handleStartGame} disabled={isLoading} activeOpacity={0.8}><Text style={styles.startMatchBtnText}>{isLoading ? 'Starting...' : 'Commence Match'}</Text></TouchableOpacity>
                     </View>
@@ -2257,6 +2450,14 @@ export default function RecorderScreen() {
                 onSecondary={() => setShowEndGameConfirm(false)}
             />
 
+            <DemoRecorderStartModal
+                visible={showDemoRecorderStartModal}
+                ourTeamName={ourTeam?.name || 'Your team'}
+                opponentName={selectedOpponentTeam?.name || opponentName.trim() || 'Opponent'}
+                onDismiss={dismissDemoRecorderTips}
+                onContinue={continueDemoRecorderAfterTips}
+            />
+
             <HalftimeTimerModal
                 visible={showHalftimeTimer}
                 gameId={gameState.gameId || gameSubscriptionKey || 'pending'}
@@ -2338,6 +2539,37 @@ const getStyles = (colors: ThemeColors) => {
         marginBottom: 12,
     },
     scheduledPrefillText: { ...getTypography(colors).bodySmall, color: colors.primary, fontWeight: '600' },
+    demoRecorderBanner: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: 10,
+        padding: 12,
+        borderRadius: Layout.radiusMd,
+        borderWidth: 1,
+        borderColor: colors.border,
+        backgroundColor: colors.surfaceSecondary,
+        marginBottom: 14,
+    },
+    demoRecorderBannerText: { ...getTypography(colors).bodySmall, color: colors.text, flex: 1, lineHeight: 20 },
+    demoGuideCard: {
+        borderWidth: 1,
+        borderColor: colors.border,
+        borderRadius: Layout.radiusMd,
+        backgroundColor: colors.surfaceSecondary,
+        marginBottom: 18,
+        overflow: 'hidden',
+    },
+    demoGuideHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 12,
+    },
+    demoGuideTitle: { ...getTypography(colors).body, fontWeight: '800', color: colors.text, flex: 1 },
+    demoGuideBody: { paddingHorizontal: 12, paddingBottom: 12 },
+    demoGuideBullet: { ...getTypography(colors).bodySmall, color: colors.textSecondary, lineHeight: 20, marginBottom: 8 },
+    demoGuideEm: { color: colors.text, fontWeight: '800' },
     coachIntelCard: {
         backgroundColor: colors.surfaceSecondary,
         padding: 14,

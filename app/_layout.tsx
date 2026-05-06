@@ -17,14 +17,15 @@ function useProtectedRoutes() {
     if (!navigationState?.key) return;
 
     const unsubscribe = onAuthStateChanged(auth, (user) => {
-      const root = segments[0];
+      const s = segments as unknown as string[];
+      const root = s[0];
       const isPublicRoute =
-        segments.length === 0 ||
+        s.length === 0 ||
         root === "index" ||
         root === "forgot-password" ||
         root === "demo" ||
         root === "legal" ||
-        (root === "game" && segments[1] === "join-observer");
+        (root === "game" && s[1] === "join-observer");
 
       if (!user && !isPublicRoute) {
         router.replace("/");
