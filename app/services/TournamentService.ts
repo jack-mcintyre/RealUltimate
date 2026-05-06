@@ -5,12 +5,16 @@ import {
     TournamentActivityEntry,
     TournamentEngine,
     TournamentEnrollmentMode,
+    TournamentMisconductReport,
     TournamentMatch,
     TournamentMatchStatus,
     TournamentParticipant,
     TournamentPrivacy,
+    TournamentRoomMessage,
     TournamentSeeding,
+    TournamentScoreSubmission,
     TournamentSpiritScore,
+    TournamentSpiritSubmission,
     TournamentStage,
     TournamentStanding,
     TournamentStatus,
@@ -42,6 +46,7 @@ export type TournamentDirectoryItem = {
     enrollmentMode: TournamentEnrollmentMode;
     participantCount: number;
     createdAt: number;
+    createdBy?: string;
 };
 
 const codeChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -105,6 +110,60 @@ const shuffled = <T,>(items: T[]): T[] => {
 };
 
 const makeParticipantId = (index: number) => `p_${index + 1}`;
+
+const poolMatchPairKey = (teamAId: string, teamBId: string) => {
+    return [teamAId, teamBId].sort().join('__vs__');
+};
+
+const hasMatchProgress = (match: TournamentMatch) => {
+    return typeof match.teamAScore === 'number'
+        || typeof match.teamBScore === 'number'
+        || !!match.winnerId
+        || !!match.linkedGameId
+        || !!match.linkedGameIdB
+        || match.matchStatus === 'final'
+        || match.matchStatus === 'in_progress'
+        || !!match.scoreSubmittedBy;
+};
+
+const restoreArchivedPoolMatch = (
+    archived: TournamentMatch | undefined,
+    nextMatch: TournamentMatch
+): TournamentMatch => {
+    if (!archived) return nextMatch;
+
+    const sameOrder = archived.teamAId === nextMatch.teamAId && archived.teamBId === nextMatch.teamBId;
+    const reversedOrder = archived.teamAId === nextMatch.teamBId && archived.teamBId === nextMatch.teamAId;
+    if (!sameOrder && !reversedOrder) return nextMatch;
+
+    const restored: TournamentMatch = {
+        ...archived,
+        ...nextMatch,
+        id: nextMatch.id,
+        teamAId: nextMatch.teamAId,
+        teamBId: nextMatch.teamBId,
+        stage: nextMatch.stage,
+        round: nextMatch.round,
+        group: nextMatch.group,
+    };
+
+    if (reversedOrder) {
+        restored.teamAScore = archived.teamBScore;
+        restored.teamBScore = archived.teamAScore;
+        restored.linkedGameId = archived.linkedGameIdB;
+        restored.linkedGameIdB = archived.linkedGameId;
+        restored.captainCheckIn = {
+            teamA: archived.captainCheckIn?.teamB,
+            teamB: archived.captainCheckIn?.teamA,
+        };
+        if (archived.winnerId === archived.teamAId) restored.winnerId = nextMatch.teamBId;
+        if (archived.winnerId === archived.teamBId) restored.winnerId = nextMatch.teamAId;
+        if (archived.loserId === archived.teamAId) restored.loserId = nextMatch.teamBId;
+        if (archived.loserId === archived.teamBId) restored.loserId = nextMatch.teamAId;
+    }
+
+    return restored;
+};
 
 const buildParticipants = (drafts: ParticipantDraft[], seeding: TournamentSeeding) => {
     const cleaned = drafts
@@ -668,6 +727,7 @@ const toDirectoryItem = (tournament: Tournament): TournamentDirectoryItem => {
         enrollmentMode: tournament.enrollmentMode,
         participantCount: Object.keys(tournament.participants || {}).length,
         createdAt: tournament.createdAt,
+        createdBy: tournament.createdBy,
     };
 };
 
@@ -688,6 +748,7 @@ const buildTournamentIndexUpdates = (
             tournamentId: tournament.id,
             createdAt: tournament.createdAt,
             role: 'admin',
+            createdBy: tournament.createdBy,
         };
     }
 
@@ -697,6 +758,7 @@ const buildTournamentIndexUpdates = (
             createdAt: tournament.createdAt,
             privacy: tournament.privacy,
             role: 'spectator',
+            createdBy: tournament.createdBy,
         };
     }
 
@@ -847,6 +909,33 @@ export const TournamentService = {
             matches,
             standings: {},
             spiritScores: createSpiritScores(participants),
+            runMode: draft.enrollmentMode === 'open' ? 'team_self_serve' : 'manual',
+            teamSelfServeEnabled: draft.enrollmentMode === 'open',
+            coachChatEnabled: draft.enrollmentMode === 'open',
+            teamScoreSubmissionEnabled: draft.enrollmentMode === 'open',
+            requireScoreVerification: draft.enrollmentMode === 'open',
+            scoreChallengeWindowMinutes: 15,
+            mandatorySpiritEnabled: false,
+            spiritLeaderboardEnabled: true,
+            misconductTrackingEnabled: true,
+            observerOnlyCards: false,
+            playerClaimingEnabled: false,
+            tradingCardsEnabled: true,
+            statPrivacyDefault: 'team',
+            lineCallAssistantEnabled: true,
+            practiceKpiEnabled: false,
+            recapCardsEnabled: true,
+            teamSpecificNotificationsEnabled: true,
+            predictionEnabled: true,
+            publicBracketEnabled: true,
+            publicRosterStatsEnabled: true,
+            fieldAssignmentPublic: true,
+            matchRoomMediaEnabled: false,
+            bracketPredictionEnabled: true,
+            spiritChampionBadgeEnabled: true,
+            tournamentPageDensity: 'comfortable',
+            recapCardStyle: 'classic',
+            coachChatVisibility: 'coaches_only',
         };
 
         const normalized = recomputeTournament(tournament);
@@ -885,6 +974,125 @@ export const TournamentService = {
         await update(ref(db), updates);
     },
 
+    submitMatchScoreFromGame: async (
+        tournamentId: string,
+        matchId: string,
+        gameId: string,
+        participantId: string
+    ) => {
+        const tournamentRef = ref(db, tournamentPath(tournamentId));
+        const [tournamentSnap, gameSnap] = await Promise.all([
+            get(tournamentRef),
+            get(ref(db, `games/${gameId}`)),
+        ]);
+        if (!tournamentSnap.exists()) throw new Error('Tournament not found.');
+        if (!gameSnap.exists()) throw new Error('Linked game not found.');
+
+        const tournament = { ...(tournamentSnap.val() as Tournament), id: tournamentId };
+        const match = tournament.matches?.[matchId];
+        if (!match) throw new Error('Match not found.');
+
+        const game = gameSnap.val() as { score1?: number; score2?: number; currentRecorderId?: string };
+        const submittedAsTeamB = participantId === match.teamBId;
+        const teamAScore = submittedAsTeamB ? clampScore(Number(game.score2 || 0)) : clampScore(Number(game.score1 || 0));
+        const teamBScore = submittedAsTeamB ? clampScore(Number(game.score1 || 0)) : clampScore(Number(game.score2 || 0));
+
+        const submission: TournamentScoreSubmission = {
+            participantId,
+            submittedByUid: game.currentRecorderId || '',
+            teamAScore,
+            teamBScore,
+            linkedGameId: gameId,
+            createdAt: Date.now(),
+        };
+
+        match.scoreSubmittedBy = {
+            ...(match.scoreSubmittedBy || {}),
+            [participantId]: submission,
+        };
+        match.matchStatus = tournament.requireScoreVerification ? 'in_progress' : 'final';
+        match.verificationStatus = tournament.requireScoreVerification ? 'pending' : 'verified';
+        if (participantId === match.teamAId) match.linkedGameId = gameId;
+        if (participantId === match.teamBId) match.linkedGameIdB = gameId;
+
+        const submissions = Object.values(match.scoreSubmittedBy);
+        const matchingSubmission = submissions.find((entry) => (
+            entry.participantId !== participantId &&
+            entry.teamAScore === teamAScore &&
+            entry.teamBScore === teamBScore
+        ));
+
+        if (!tournament.requireScoreVerification || matchingSubmission || submissions.length >= 2) {
+            match.teamAScore = teamAScore;
+            match.teamBScore = teamBScore;
+            match.matchStatus = matchingSubmission || !tournament.requireScoreVerification ? 'final' : 'in_progress';
+            match.verificationStatus = matchingSubmission || !tournament.requireScoreVerification ? 'verified' : 'challenged';
+            if (match.verificationStatus === 'verified') {
+                match.verifiedAt = Date.now();
+                match.challengeDeadlineAt = Date.now() + ((tournament.scoreChallengeWindowMinutes || 15) * 60 * 1000);
+            }
+        }
+
+        const normalized = recomputeTournament(tournament);
+        const sanitizedTournament = sanitizeForFirebase(normalized) as Tournament;
+        const updates: Record<string, unknown> = {
+            [tournamentPath(tournamentId)]: sanitizedTournament,
+            ...buildTournamentIndexUpdates(sanitizedTournament),
+        };
+        await update(ref(db), updates);
+
+        const statusText = match.verificationStatus === 'challenged'
+            ? 'Score submissions disagree and need TD review.'
+            : `Score submitted from linked game: ${teamAScore}-${teamBScore}`;
+        await TournamentService.logActivity(tournamentId, statusText, 'score');
+    },
+
+    verifyMatchScore: async (
+        tournamentId: string,
+        matchId: string,
+        verifierUid: string,
+        teamAScore?: number,
+        teamBScore?: number
+    ) => {
+        const tournamentRef = ref(db, tournamentPath(tournamentId));
+        const snapshot = await get(tournamentRef);
+        if (!snapshot.exists()) throw new Error('Tournament not found.');
+
+        const tournament = { ...(snapshot.val() as Tournament), id: tournamentId };
+        const match = tournament.matches?.[matchId];
+        if (!match) throw new Error('Match not found.');
+
+        if (typeof teamAScore === 'number') match.teamAScore = clampScore(teamAScore);
+        if (typeof teamBScore === 'number') match.teamBScore = clampScore(teamBScore);
+        match.verificationStatus = 'verified';
+        match.matchStatus = 'final';
+        match.verifiedAt = Date.now();
+        match.verifiedBy = verifierUid;
+        match.challengeDeadlineAt = Date.now() + ((tournament.scoreChallengeWindowMinutes || 15) * 60 * 1000);
+
+        const normalized = recomputeTournament(tournament);
+        const sanitizedTournament = sanitizeForFirebase(normalized) as Tournament;
+        await update(ref(db), {
+            [tournamentPath(tournamentId)]: sanitizedTournament,
+            ...buildTournamentIndexUpdates(sanitizedTournament),
+        });
+    },
+
+    challengeMatchScore: async (
+        tournamentId: string,
+        matchId: string,
+        participantId: string,
+        reason: string
+    ) => {
+        const cleanReason = reason.trim().slice(0, 500);
+        await update(ref(db, `${tournamentPath(tournamentId)}/matches/${matchId}`), {
+            verificationStatus: 'challenged',
+            challengedByParticipantId: participantId,
+            challengeReason: cleanReason,
+        });
+        await TournamentService.logActivity(tournamentId, 'A score challenge was opened for TD review.', 'system');
+    },
+
     updateStatus: async (
         tournamentId: string,
         status: TournamentStatus
@@ -914,7 +1122,7 @@ export const TournamentService = {
             communication: number;
         }
     ) => {
-        const clampSpirit = (value: number) => Math.max(0, Math.min(5, Math.floor(value)));
+        const clampSpirit = (value: number) => Math.max(0, Math.min(4, Math.floor(value)));
         const rules = clampSpirit(scores.rules);
         const fouls = clampSpirit(scores.fouls);
         const fairness = clampSpirit(scores.fairness);
@@ -934,17 +1142,136 @@ export const TournamentService = {
         } as TournamentSpiritScore);
     },
 
+    submitMatchSpiritScore: async (
+        tournamentId: string,
+        matchId: string,
+        fromParticipantId: string,
+        forParticipantId: string,
+        submittedByUid: string,
+        scores: {
+            rules: number;
+            fouls: number;
+            fairness: number;
+            attitude: number;
+            communication: number;
+        }
+    ) => {
+        const clampSpirit = (value: number) => Math.max(0, Math.min(4, Math.floor(value)));
+        const submission: TournamentSpiritSubmission = {
+            matchId,
+            fromParticipantId,
+            forParticipantId,
+            submittedByUid,
+            rules: clampSpirit(scores.rules),
+            fouls: clampSpirit(scores.fouls),
+            fairness: clampSpirit(scores.fairness),
+            attitude: clampSpirit(scores.attitude),
+            communication: clampSpirit(scores.communication),
+            total: 0,
+            createdAt: Date.now(),
+        };
+        submission.total = submission.rules + submission.fouls + submission.fairness + submission.attitude + submission.communication;
+
+        const tournamentRef = ref(db, tournamentPath(tournamentId));
+        const snapshot = await get(tournamentRef);
+        if (!snapshot.exists()) throw new Error('Tournament not found.');
+
+        const tournament = { ...(snapshot.val() as Tournament), id: tournamentId };
+        const key = `${fromParticipantId}_${forParticipantId}`;
+        const submissionsForMatch = {
+            ...(tournament.spiritSubmissions?.[matchId] || {}),
+            [key]: submission,
+        };
+        tournament.spiritSubmissions = {
+            ...(tournament.spiritSubmissions || {}),
+            [matchId]: submissionsForMatch,
+        };
+
+        const allForParticipant = Object.values(tournament.spiritSubmissions)
+            .flatMap((matchSubmissions) => Object.values(matchSubmissions || {}))
+            .filter((entry) => entry.forParticipantId === forParticipantId);
+
+        if (allForParticipant.length > 0) {
+            const avg = allForParticipant.reduce((acc, entry) => ({
+                rules: acc.rules + entry.rules,
+                fouls: acc.fouls + entry.fouls,
+                fairness: acc.fairness + entry.fairness,
+                attitude: acc.attitude + entry.attitude,
+                communication: acc.communication + entry.communication,
+            }), { rules: 0, fouls: 0, fairness: 0, attitude: 0, communication: 0 });
+
+            const divisor = allForParticipant.length;
+            const spiritScore: TournamentSpiritScore = {
+                participantId: forParticipantId,
+                rules: Math.round(avg.rules / divisor),
+                fouls: Math.round(avg.fouls / divisor),
+                fairness: Math.round(avg.fairness / divisor),
+                attitude: Math.round(avg.attitude / divisor),
+                communication: Math.round(avg.communication / divisor),
+                total: Math.round(allForParticipant.reduce((sum, entry) => sum + entry.total, 0) / divisor),
+            };
+            tournament.spiritScores = {
+                ...(tournament.spiritScores || {}),
+                [forParticipantId]: spiritScore,
+            };
+        }
+
+        const sanitizedTournament = sanitizeForFirebase(tournament) as Tournament;
+        await update(ref(db), {
+            [tournamentPath(tournamentId)]: sanitizedTournament,
+            ...buildTournamentIndexUpdates(sanitizedTournament),
+        });
+    },
+
+    appendMatchRoomMessage: async (
+        tournamentId: string,
+        matchId: string,
+        senderUid: string,
+        message: string,
+        participantId?: string
+    ) => {
+        const cleanMessage = message.trim().slice(0, 1000);
+        if (!cleanMessage) throw new Error('Message is required.');
+
+        const messageRef = push(ref(db, `${tournamentPath(tournamentId)}/roomMessages/${matchId}`));
+        if (!messageRef.key) throw new Error('Could not create message.');
+
+        const payload: TournamentRoomMessage = {
+            id: messageRef.key,
+            matchId,
+            senderUid,
+            ...(participantId ? { participantId } : {}),
+            message: cleanMessage,
+            createdAt: Date.now(),
+        };
+
+        await set(messageRef, payload);
+        return payload.id;
+    },
+
+    reportMisconduct: async (
+        tournamentId: string,
+        report: Omit<TournamentMisconductReport, 'id' | 'createdAt' | 'status'>
+    ) => {
+        const reportRef = push(ref(db, `${tournamentPath(tournamentId)}/misconductReports`));
+        if (!reportRef.key) throw new Error('Could not create report.');
+
+        const payload: TournamentMisconductReport = {
+            ...report,
+            id: reportRef.key,
+            reason: report.reason.trim().slice(0, 1000),
+            createdAt: Date.now(),
+            status: 'open',
+        };
+
+        await set(reportRef, payload);
+        await TournamentService.logActivity(tournamentId, 'A misconduct report was submitted for TD review.', 'system');
+        return payload.id;
+    },
+
     updateTournamentSettings: async (
         tournamentId: string,
-        settings: {
-            name?: string;
-            startDate?: string;
-            endDate?: string;
-            enrollmentDeadline?: string;
-            hostName?: string;
-            privacy?: 'public' | 'private';
-            enrollmentMode?: 'manual' | 'open';
-        }
+        settings: Partial<Tournament>
     ) => {
         const tournamentRef = ref(db, tournamentPath(tournamentId));
         const snapshot = await get(tournamentRef);
@@ -986,7 +1313,7 @@ export const TournamentService = {
             throw new Error('The enrollment deadline has passed.');
         }
 
-        const pId = `P_${generateId()}`;
+        const pId = `p_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
         const newParticipant = {
             id: pId,
             name: participant.name,
@@ -1170,77 +1497,94 @@ export const TournamentService = {
         tournamentId: string,
         config: { poolCount?: number; poolSize?: number; qualifiersPerPool?: number; poolFormat?: 'round_robin' | 'partial' }
     ) => {
-        // Save metadata first
-        const metaUpdates: Record<string, unknown> = {};
-        if (config.poolCount !== undefined) metaUpdates[`${tournamentPath(tournamentId)}/poolCount`] = config.poolCount;
-        if (config.poolSize !== undefined) metaUpdates[`${tournamentPath(tournamentId)}/poolSize`] = config.poolSize;
-        if (config.qualifiersPerPool !== undefined) metaUpdates[`${tournamentPath(tournamentId)}/qualifiersPerPool`] = config.qualifiersPerPool;
-        if (config.poolFormat !== undefined) metaUpdates[`${tournamentPath(tournamentId)}/poolFormat`] = config.poolFormat;
+        const snap = await get(ref(db, tournamentPath(tournamentId)));
+        if (!snap.exists()) throw new Error('Tournament not found.');
 
-        // If poolCount changed, rebuild pools and pool matches
-        if (config.poolCount !== undefined && config.poolCount >= 1) {
-            const snap = await get(ref(db, tournamentPath(tournamentId)));
-            if (snap.exists()) {
-                const tournament = snap.val() as Tournament;
-                const participants = tournament.participants || {};
-                const participantIds = sortedParticipants(participants);
-                const poolCount = config.poolCount;
+        const tournament = { ...(snap.val() as Tournament), id: tournamentId };
+        const shouldRebuildPools = config.poolCount !== undefined && config.poolCount >= 1;
 
-                // Snake-seed into pools
-                const poolLabels = Array.from({ length: poolCount }, (_, i) => String.fromCharCode(65 + i));
-                const newPools: Record<string, string[]> = {};
-                poolLabels.forEach(l => { newPools[l] = []; });
+        if (config.poolCount !== undefined) tournament.poolCount = config.poolCount;
+        if (config.poolSize !== undefined) tournament.poolSize = config.poolSize;
+        if (config.qualifiersPerPool !== undefined) tournament.qualifiersPerPool = config.qualifiersPerPool;
+        if (config.poolFormat !== undefined) tournament.poolFormat = config.poolFormat;
 
-                participantIds.forEach((id, idx) => {
-                    // Snake: 0→A, 1→B, 2→C, 3→C, 4→B, 5→A, 6→A, ...
-                    const cycle = Math.floor(idx / poolCount);
-                    const pos = idx % poolCount;
-                    const poolIndex = cycle % 2 === 0 ? pos : poolCount - 1 - pos;
-                    newPools[poolLabels[poolIndex]].push(id);
-                });
+        if (shouldRebuildPools) {
+            const participants = tournament.participants || {};
+            const participantIds = sortedParticipants(participants);
+            const poolCount = config.poolCount!;
 
-                metaUpdates[`${tournamentPath(tournamentId)}/pools`] = newPools;
+            const poolLabels = Array.from({ length: poolCount }, (_, i) => String.fromCharCode(65 + i));
+            const newPools: Record<string, string[]> = {};
+            poolLabels.forEach(l => { newPools[l] = []; });
 
-                // Rebuild pool matches (round-robin within each pool)
-                const oldMatches = tournament.matches || {};
-                const newMatches: Record<string, unknown> = {};
+            participantIds.forEach((id, idx) => {
+                const cycle = Math.floor(idx / poolCount);
+                const pos = idx % poolCount;
+                const poolIndex = cycle % 2 === 0 ? pos : poolCount - 1 - pos;
+                newPools[poolLabels[poolIndex]].push(id);
+            });
 
-                // Keep non-pool matches (bracket matches)
-                Object.entries(oldMatches).forEach(([id, m]) => {
-                    if ((m as any).stage !== 'pool') {
-                        newMatches[id] = m;
-                    } else {
-                        // Remove old pool matches
-                        newMatches[id] = null;
-                    }
-                });
+            const oldMatches = tournament.matches || {};
+            const hadPoolProgress = Object.values(oldMatches).some((match) => match.stage === 'pool' && hasMatchProgress(match));
+            const archivedPoolMatches: Record<string, TournamentMatch> = {
+                ...(tournament.archivedPoolMatches || {}),
+            };
 
-                // Generate new pool matches
+            Object.values(oldMatches).forEach((match) => {
+                if (match.stage !== 'pool' || !match.teamAId || !match.teamBId) return;
+                archivedPoolMatches[poolMatchPairKey(match.teamAId, match.teamBId)] = match;
+            });
+
+            const nextMatches: Record<string, TournamentMatch> = {};
+            Object.entries(oldMatches).forEach(([id, match]) => {
+                if (match.stage !== 'pool') {
+                    nextMatches[id] = match;
+                }
+            });
+
+            poolLabels.forEach(poolLabel => {
+                const teamIds = newPools[poolLabel];
                 let matchCounter = 1;
-                poolLabels.forEach(poolLabel => {
-                    const teamIds = newPools[poolLabel];
-                    for (let i = 0; i < teamIds.length; i++) {
-                        for (let j = i + 1; j < teamIds.length; j++) {
-                            const matchId = `pool_${poolLabel}_m${matchCounter}`;
-                            newMatches[matchId] = {
-                                id: matchId,
-                                stage: 'pool',
-                                round: 1,
-                                group: poolLabel,
-                                teamAId: teamIds[i],
-                                teamBId: teamIds[j],
-                                matchStatus: 'upcoming',
-                            };
-                            matchCounter++;
-                        }
+                for (let i = 0; i < teamIds.length; i++) {
+                    for (let j = i + 1; j < teamIds.length; j++) {
+                        const matchId = `pool_${poolLabel}_m${matchCounter}`;
+                        const baseMatch: TournamentMatch = {
+                            id: matchId,
+                            stage: 'pool',
+                            round: 1,
+                            group: poolLabel,
+                            teamAId: teamIds[i],
+                            teamBId: teamIds[j],
+                            matchStatus: 'upcoming',
+                        };
+                        const archived = archivedPoolMatches[poolMatchPairKey(teamIds[i], teamIds[j])];
+                        nextMatches[matchId] = restoreArchivedPoolMatch(archived, baseMatch);
+                        matchCounter++;
                     }
-                });
+                }
+            });
 
-                metaUpdates[`${tournamentPath(tournamentId)}/matches`] = { ...Object.fromEntries(Object.entries(newMatches).filter(([, v]) => v !== null)) };
+            tournament.pools = newPools;
+            tournament.matches = nextMatches;
+            tournament.archivedPoolMatches = archivedPoolMatches;
+            if (hadPoolProgress) {
+                const log = tournament.activityLog || [];
+                log.unshift({
+                    id: `LOG_${Date.now()}`,
+                    message: 'Pool configuration changed after pool matches had progress. Matching games were archived and restored by team pairing when possible.',
+                    timestamp: Date.now(),
+                    type: 'schedule',
+                });
+                tournament.activityLog = log.slice(0, 100);
             }
         }
 
-        await update(ref(db), metaUpdates);
+        const normalized = recomputeTournament(tournament);
+        const sanitizedTournament = sanitizeForFirebase(normalized) as Tournament;
+        await update(ref(db), {
+            [tournamentPath(tournamentId)]: sanitizedTournament,
+            ...buildTournamentIndexUpdates(sanitizedTournament, { allowPublicDelete: true }),
+        });
     },
 
     // ─── Bracket Configuration ──────────────────────────────

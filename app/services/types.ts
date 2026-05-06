@@ -7,13 +7,32 @@ export type PlayerRole =
   | 'd_handler'
   | 'd_cutter';
 
+export type PlayerPrimaryLine = 'O' | 'D' | 'flex';
+export type PlayerPosition = 'handler' | 'cutter' | 'hybrid';
+export type PointLineType = 'O' | 'D';
+
+export const GUEST_TEAM_ID = '__guest_opponent__';
+export const isGuestTeamId = (teamId?: string | null) => !teamId || teamId === GUEST_TEAM_ID;
+export const isRealTeamId = (teamId?: string | null) => !!teamId && teamId !== GUEST_TEAM_ID;
+
+export type StatPrivacy = 'public' | 'team' | 'private';
+
 export interface Player {
   id: string;
   name: string;
   number?: string;
   teamId: string;
   role?: PlayerRole;
+  primaryLine?: PlayerPrimaryLine;
+  position?: PlayerPosition;
   badge?: string;
+  claimedByUid?: string;
+  claimCodeHash?: string;
+  claimCodeCreatedAt?: number;
+  verifiedRosterLink?: boolean;
+  statPrivacy?: StatPrivacy;
+  signatureMove?: string;
+  cardRarity?: 'base' | 'bronze' | 'silver' | 'gold' | 'elite' | 'iron';
 }
 
 export interface PlayerStats {
@@ -28,6 +47,10 @@ export interface PlayerStats {
   passCompletions?: number;
   passTurnovers?: number;
   receptions?: number;
+  pointsPlayed?: number;
+  oPointsPlayed?: number;
+  dPointsPlayed?: number;
+  pointDiff?: number;
 }
 
 export interface TeamManager {
@@ -95,6 +118,61 @@ export interface UserPublicProfile {
   socialLinks?: SocialLinks;
 }
 
+export interface NotificationTeamPreference {
+  enabled: boolean;
+  scoreAlerts?: 'all' | 'finals' | 'off';
+  milestoneAlerts?: boolean;
+  comebackAlerts?: boolean;
+  liveActivityEnabled?: boolean;
+  playerFilters?: string[];
+}
+
+export interface NotificationPreferences {
+  pushSetting: 'all' | 'game' | 'off';
+  liveActivitiesEnabled: boolean;
+  milestoneAlertsEnabled: boolean;
+  comebackAlertsEnabled: boolean;
+  tournamentAlertsEnabled: boolean;
+  teamPreferences?: Record<string, NotificationTeamPreference>;
+}
+
+export interface UserDeviceToken {
+  token: string;
+  platform: 'ios' | 'android' | 'web' | 'unknown';
+  updatedAt: number;
+  appVersion?: string;
+}
+
+export type SafetyReportTargetType = 'game' | 'team' | 'player' | 'tournament' | 'match_room' | 'profile';
+
+export interface SafetyReport {
+  id: string;
+  reporterUid: string;
+  targetType: SafetyReportTargetType;
+  targetId: string;
+  targetUid?: string;
+  reason: string;
+  details?: string;
+  status: 'open' | 'reviewed' | 'dismissed' | 'actioned';
+  createdAt: number;
+}
+
+export interface UserBlock {
+  blockedUid: string;
+  createdAt: number;
+  source?: SafetyReportTargetType;
+}
+
+export interface AppLaunchConfig {
+  minSupportedVersion?: string;
+  latestVersion?: string;
+  maintenanceMode?: boolean;
+  maintenanceMessage?: string;
+  upgradeMessage?: string;
+  appStoreUrl?: string;
+  playStoreUrl?: string;
+}
+
 export interface Team {
   id: string;
   coachId: string;
@@ -112,7 +190,15 @@ export interface Team {
 export interface TeamJoinCodes {
   coach: string;
   spectator: string;
+  /**
+   * Dedicated observer / neutral-scorer code. Distinct from the public
+   * spectator code so coaches can rotate scorer access without breaking
+   * fan follow links. Lazily generated for legacy teams on first read.
+   */
+  observer?: string;
 }
+
+export type TeamAccessRole = 'coach' | 'spectator' | 'observer';
 
 export type ScheduledAvailabilityStatus = 'yes' | 'no';
 
@@ -129,6 +215,18 @@ export interface ScheduledGame {
   createdBy: string;
 }
 
+export interface TeamGameLink {
+  gameId: string;
+  teamId: string;
+  opponentTeamId?: string;
+  status: 'active' | 'final';
+  createdAt: number;
+  completedAt?: number;
+  source: 'primary' | 'opponent' | 'tournament' | 'observer_neutral';
+  /** When source is observer_neutral, coaches must accept before the game appears in team history / stats. */
+  profileInclusion?: 'pending' | 'accepted' | 'declined';
+}
+
 export type TournamentPrivacy = 'public' | 'private';
 export type TournamentEnrollmentMode = 'manual' | 'open';
 export type TournamentEngine = 'single_elim' | 'pool_to_bracket';
@@ -136,6 +234,9 @@ export type TournamentSeeding = 'manual' | 'rating' | 'random';
 export type TournamentStatus = 'draft' | 'active' | 'completed';
 export type TournamentStage = 'pool' | 'crossover' | 'championship' | 'consolation';
 export type TournamentMatchStatus = 'upcoming' | 'in_progress' | 'final' | 'cancelled';
+export type TournamentRunMode = 'manual' | 'team_self_serve';
+export type TournamentScoreVerificationStatus = 'pending' | 'verified' | 'challenged' | 'overridden';
+export type MisconductCardColor = 'blue' | 'yellow' | 'red';
 
 export interface TournamentParticipant {
   id: string;
@@ -178,6 +279,13 @@ export interface TournamentMatch {
   linkedGameId?: string; // Links to a RealUltimate game for live stat tracking
   linkedGameIdB?: string; // Team B's independent game recording
   captainCheckIn?: { teamA?: boolean; teamB?: boolean };
+  verificationStatus?: TournamentScoreVerificationStatus;
+  scoreSubmittedBy?: Record<string, TournamentScoreSubmission>;
+  challengeDeadlineAt?: number;
+  challengedByParticipantId?: string;
+  challengeReason?: string;
+  verifiedAt?: number;
+  verifiedBy?: string;
 }
 
 export interface TournamentActivityEntry {
@@ -185,6 +293,51 @@ export interface TournamentActivityEntry {
   message: string;
   timestamp: number;
   type: 'score' | 'schedule' | 'system' | 'announcement';
+}
+
+export interface TournamentScoreSubmission {
+  participantId: string;
+  submittedByUid: string;
+  teamAScore: number;
+  teamBScore: number;
+  linkedGameId?: string;
+  createdAt: number;
+}
+
+export interface TournamentSpiritSubmission {
+  matchId: string;
+  fromParticipantId: string;
+  forParticipantId: string;
+  submittedByUid: string;
+  rules: number;
+  fouls: number;
+  fairness: number;
+  attitude: number;
+  communication: number;
+  total: number;
+  createdAt: number;
+}
+
+export interface TournamentRoomMessage {
+  id: string;
+  matchId: string;
+  senderUid: string;
+  participantId?: string;
+  message: string;
+  createdAt: number;
+}
+
+export interface TournamentMisconductReport {
+  id: string;
+  matchId?: string;
+  reporterUid: string;
+  participantId?: string;
+  teamId?: string;
+  playerId?: string;
+  cardColor: MisconductCardColor;
+  reason: string;
+  createdAt: number;
+  status: 'open' | 'reviewed' | 'dismissed';
 }
 
 export interface TournamentSpiritScore {
@@ -251,12 +404,53 @@ export interface Tournament {
   // Schedule
   scheduleDays?: number; // 1, 2, 3
   scheduleHold?: { active: boolean; reason?: string; since?: number };
+  archivedPoolMatches?: Record<string, TournamentMatch>;
 
   // Activity Log
   activityLog?: TournamentActivityEntry[];
 
   // Templates
   templateId?: string;
+
+  // Team-run / trust and safety settings
+  runMode?: TournamentRunMode;
+  teamSelfServeEnabled?: boolean;
+  coachChatEnabled?: boolean;
+  teamScoreSubmissionEnabled?: boolean;
+  requireScoreVerification?: boolean;
+  scoreChallengeWindowMinutes?: number;
+  mandatorySpiritEnabled?: boolean;
+  spiritLeaderboardEnabled?: boolean;
+  misconductTrackingEnabled?: boolean;
+  observerOnlyCards?: boolean;
+  playerClaimingEnabled?: boolean;
+  tradingCardsEnabled?: boolean;
+  statPrivacyDefault?: StatPrivacy;
+  lineCallAssistantEnabled?: boolean;
+  practiceKpiEnabled?: boolean;
+  recapCardsEnabled?: boolean;
+  teamSpecificNotificationsEnabled?: boolean;
+  predictionEnabled?: boolean;
+  publicBracketEnabled?: boolean;
+  publicRosterStatsEnabled?: boolean;
+  fieldAssignmentPublic?: boolean;
+  matchRoomMediaEnabled?: boolean;
+  bracketPredictionEnabled?: boolean;
+  spiritChampionBadgeEnabled?: boolean;
+  tournamentPageDensity?: 'compact' | 'comfortable';
+  recapCardStyle?: 'classic' | 'bold' | 'minimal';
+  coachChatVisibility?: 'coaches_only' | 'td_visible';
+  venueName?: string;
+  venueAddress?: string;
+  parkingInfo?: string;
+  medicalInfo?: string;
+  weatherPolicy?: string;
+  scheduleNotes?: string;
+  sponsorLine?: string;
+  publicContactEmail?: string;
+  roomMessages?: Record<string, Record<string, TournamentRoomMessage>>;
+  spiritSubmissions?: Record<string, Record<string, TournamentSpiritSubmission>>;
+  misconductReports?: Record<string, TournamentMisconductReport>;
 }
 
 export type EventType =
@@ -276,7 +470,9 @@ export type EventType =
   | 'Halftime' // Context event to flip possession and track periods
   | 'End Halftime'
   | 'Timeout'
-  | 'Pass'; // Advanced tracking: when a player passes to another
+  | 'Blue Card'
+  | 'Yellow Card'
+  | 'Red Card';
 
 // Field coordinates for premium tracking (field map input)
 export interface FieldCoordinate {
@@ -298,6 +494,27 @@ export interface GameEvent {
   fromFieldPosition?: FieldCoordinate; // Origin marker for pass vector rendering
   fieldPosition?: FieldCoordinate; // Premium field map tracking
   gameElapsedSec?: number; // Seconds since game start (for timestamp bookmarks)
+  /** Observer-delegated events are quarantined until coach finalizes the game. */
+  is_verified?: boolean;
+  cardColor?: MisconductCardColor;
+  infractionReason?: string;
+  lineupPlayerIds?: string[];
+  lineType?: PointLineType;
+  pointNumber?: number;
+  timeoutDurationSec?: number;
+}
+
+export interface PointLineupSnapshot {
+  pointNumber: number;
+  lineType: PointLineType;
+  playerIds: string[];
+  startedAt: number;
+  completedAt?: number;
+  scoredByTeamId?: string;
+  scoreAfter?: {
+    team1: number;
+    team2: number;
+  };
 }
 
 // Spectator emoji reactions
@@ -331,16 +548,28 @@ export interface GameState {
   team1Id: string; // US
   team2Id: string; // THEM
   team2Name?: string; // GUEST TEAM TEMP NAME
+  team2LinkedTeamId?: string; // Real opponent team when available
+  recordingMode?: 'team' | 'observer';
+  trackedTeamIds?: string[];
+  opponentRosterSnapshot?: Record<string, Pick<Player, 'id' | 'name' | 'number' | 'teamId' | 'primaryLine' | 'position'>>;
   gameLocation?: string;
   score1: number;
   score2: number;
   possession: string; // which team has the disc
   firstHalfPossession: string; // Team ID
   gameTarget: number;
+  gameFormat?: '7v7' | '5v5' | 'custom';
+  softCapMinutes?: number;
+  hardCapMinutes?: number;
+  timeoutDurationSec?: number;
+  activeTimeoutStartedAt?: number;
   isHalftime: boolean;
   isGameActive: boolean;
   playerStats: Record<string, PlayerStats>;
   history?: GameEvent[];
+  currentLineupPlayerIds?: string[];
+  currentPointNumber?: number;
+  pointLineups?: Record<string, PointLineupSnapshot>;
   advancedTracking?: boolean; // If true, tracks passing & possession time
   fieldMapEnabled?: boolean; // If true, premium field map input is enabled
   sotgEnabled?: boolean;
@@ -355,7 +584,30 @@ export interface GameState {
   gameStartTimestamp?: number; // Epoch ms when game started (for timestamp bookmarks)
   currentRecorderId?: string; // UID of person currently recording (for bench hand-off)
   recorderPin?: string; // 4-digit PIN for bench hand-off
+  delegatedRecorderUid?: string;
+  delegatedRecordingScope?: 'team' | 'both';
+  recordingLockOwner?: 'coach' | 'observer';
+  activeObserverSessionPin?: string;
   predictions?: PredictionVote; // Live spectator predictions
+  tournamentId?: string;
+  tournamentMatchId?: string;
+  tournamentParticipantId?: string;
+  recordingPerspective?: 'A' | 'B' | 'standalone';
+  /** Recorded by a neutral party using two spectator codes; not owned by either coach. */
+  recordingSource?: 'coach' | 'observer_neutral';
+  observerRecorderUid?: string;
+  /** Snapshots of both rosters at game start (keys = real team ids). */
+  neutralObserverRosters?: Record<string, Record<string, Pick<Player, 'id' | 'name' | 'number' | 'teamId' | 'primaryLine' | 'position'>>>;
+  /**
+   * Display-only flag for the recorder field map. When true, the operator has
+   * physically swapped which side of the field each team defends on screen.
+   *
+   * Storage convention: field coordinates ALWAYS persist in canonical
+   * "team1 attacks toward y=100" space. The recorder applies a 180° transform
+   * (x' = 100 - x, y' = 100 - y) on tap-in and tap-out when this flag is true,
+   * so history/replay can render every event without per-event state.
+   */
+  fieldDisplayFlipped?: boolean;
 }
 
 export const INITIAL_GAME_STATE: GameState = {
@@ -368,10 +620,19 @@ export const INITIAL_GAME_STATE: GameState = {
   possession: '',
   firstHalfPossession: '',
   gameTarget: 15,
+  recordingMode: 'team',
+  trackedTeamIds: [],
+  gameFormat: '7v7',
+  softCapMinutes: 75,
+  hardCapMinutes: 90,
+  timeoutDurationSec: 70,
   isHalftime: false,
   isGameActive: false,
   playerStats: {},
   history: [],
+  currentLineupPlayerIds: [],
+  currentPointNumber: 1,
+  pointLineups: {},
   advancedTracking: false,
   fieldMapEnabled: false,
   sotgEnabled: false,

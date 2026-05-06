@@ -34,6 +34,37 @@ export default function TournamentSettingsScreen() {
     const [softCapTimeMinutes, setSoftCapTimeMinutes] = useState('');
     const [timeoutsPerHalf, setTimeoutsPerHalf] = useState('');
     const [liveScorePublic, setLiveScorePublic] = useState(true);
+    const [teamSelfServeEnabled, setTeamSelfServeEnabled] = useState(false);
+    const [coachChatEnabled, setCoachChatEnabled] = useState(false);
+    const [teamScoreSubmissionEnabled, setTeamScoreSubmissionEnabled] = useState(false);
+    const [requireScoreVerification, setRequireScoreVerification] = useState(false);
+    const [mandatorySpiritEnabled, setMandatorySpiritEnabled] = useState(false);
+    const [misconductTrackingEnabled, setMisconductTrackingEnabled] = useState(true);
+    const [playerClaimingEnabled, setPlayerClaimingEnabled] = useState(false);
+    const [tradingCardsEnabled, setTradingCardsEnabled] = useState(true);
+    const [lineCallAssistantEnabled, setLineCallAssistantEnabled] = useState(true);
+    const [practiceKpiEnabled, setPracticeKpiEnabled] = useState(false);
+    const [recapCardsEnabled, setRecapCardsEnabled] = useState(true);
+    const [teamSpecificNotificationsEnabled, setTeamSpecificNotificationsEnabled] = useState(true);
+    const [predictionEnabled, setPredictionEnabled] = useState(true);
+    const [scoreChallengeWindowMinutes, setScoreChallengeWindowMinutes] = useState('15');
+    const [publicBracketEnabled, setPublicBracketEnabled] = useState(true);
+    const [publicRosterStatsEnabled, setPublicRosterStatsEnabled] = useState(true);
+    const [fieldAssignmentPublic, setFieldAssignmentPublic] = useState(true);
+    const [matchRoomMediaEnabled, setMatchRoomMediaEnabled] = useState(false);
+    const [bracketPredictionEnabled, setBracketPredictionEnabled] = useState(true);
+    const [spiritChampionBadgeEnabled, setSpiritChampionBadgeEnabled] = useState(true);
+    const [tournamentPageDensity, setTournamentPageDensity] = useState<'compact' | 'comfortable'>('comfortable');
+    const [recapCardStyle, setRecapCardStyle] = useState<'classic' | 'bold' | 'minimal'>('classic');
+    const [coachChatVisibility, setCoachChatVisibility] = useState<'coaches_only' | 'td_visible'>('coaches_only');
+    const [venueName, setVenueName] = useState('');
+    const [venueAddress, setVenueAddress] = useState('');
+    const [parkingInfo, setParkingInfo] = useState('');
+    const [medicalInfo, setMedicalInfo] = useState('');
+    const [weatherPolicy, setWeatherPolicy] = useState('');
+    const [scheduleNotes, setScheduleNotes] = useState('');
+    const [sponsorLine, setSponsorLine] = useState('');
+    const [publicContactEmail, setPublicContactEmail] = useState('');
 
     const [showStartDatePicker, setShowStartDatePicker] = useState(false);
     const [showEndDatePicker, setShowEndDatePicker] = useState(false);
@@ -58,6 +89,37 @@ export default function TournamentSettingsScreen() {
                 setSoftCapTimeMinutes(data.softCapTimeMinutes ? String(data.softCapTimeMinutes) : '');
                 setTimeoutsPerHalf(data.timeoutsPerHalf ? String(data.timeoutsPerHalf) : '');
                 setLiveScorePublic(data.liveScorePublic ?? true);
+                setTeamSelfServeEnabled(data.teamSelfServeEnabled ?? data.enrollmentMode === 'open');
+                setCoachChatEnabled(data.coachChatEnabled ?? data.enrollmentMode === 'open');
+                setTeamScoreSubmissionEnabled(data.teamScoreSubmissionEnabled ?? data.enrollmentMode === 'open');
+                setRequireScoreVerification(data.requireScoreVerification ?? data.enrollmentMode === 'open');
+                setMandatorySpiritEnabled(data.mandatorySpiritEnabled ?? false);
+                setMisconductTrackingEnabled(data.misconductTrackingEnabled ?? true);
+                setPlayerClaimingEnabled(data.playerClaimingEnabled ?? false);
+                setTradingCardsEnabled(data.tradingCardsEnabled ?? true);
+                setLineCallAssistantEnabled(data.lineCallAssistantEnabled ?? true);
+                setPracticeKpiEnabled(data.practiceKpiEnabled ?? false);
+                setRecapCardsEnabled(data.recapCardsEnabled ?? true);
+                setTeamSpecificNotificationsEnabled(data.teamSpecificNotificationsEnabled ?? true);
+                setPredictionEnabled(data.predictionEnabled ?? true);
+                setScoreChallengeWindowMinutes(data.scoreChallengeWindowMinutes ? String(data.scoreChallengeWindowMinutes) : '15');
+                setPublicBracketEnabled(data.publicBracketEnabled ?? true);
+                setPublicRosterStatsEnabled(data.publicRosterStatsEnabled ?? true);
+                setFieldAssignmentPublic(data.fieldAssignmentPublic ?? true);
+                setMatchRoomMediaEnabled(data.matchRoomMediaEnabled ?? false);
+                setBracketPredictionEnabled(data.bracketPredictionEnabled ?? true);
+                setSpiritChampionBadgeEnabled(data.spiritChampionBadgeEnabled ?? true);
+                setTournamentPageDensity(data.tournamentPageDensity || 'comfortable');
+                setRecapCardStyle(data.recapCardStyle || 'classic');
+                setCoachChatVisibility(data.coachChatVisibility || 'coaches_only');
+                setVenueName(data.venueName || '');
+                setVenueAddress(data.venueAddress || '');
+                setParkingInfo(data.parkingInfo || '');
+                setMedicalInfo(data.medicalInfo || '');
+                setWeatherPolicy(data.weatherPolicy || '');
+                setScheduleNotes(data.scheduleNotes || '');
+                setSponsorLine(data.sponsorLine || '');
+                setPublicContactEmail(data.publicContactEmail || '');
             } else if (data) {
                 setTournament(data);
             }
@@ -123,6 +185,39 @@ export default function TournamentSettingsScreen() {
                 softCapTimeMinutes: softCapTimeMinutes ? Number(softCapTimeMinutes) : undefined,
                 timeoutsPerHalf: timeoutsPerHalf ? Number(timeoutsPerHalf) : undefined,
                 liveScorePublic,
+                runMode: teamSelfServeEnabled ? 'team_self_serve' : 'manual',
+                teamSelfServeEnabled,
+                coachChatEnabled,
+                teamScoreSubmissionEnabled,
+                requireScoreVerification,
+                scoreChallengeWindowMinutes: scoreChallengeWindowMinutes ? Number(scoreChallengeWindowMinutes) : 15,
+                mandatorySpiritEnabled,
+                spiritLeaderboardEnabled: true,
+                misconductTrackingEnabled,
+                playerClaimingEnabled,
+                tradingCardsEnabled,
+                lineCallAssistantEnabled,
+                practiceKpiEnabled,
+                recapCardsEnabled,
+                teamSpecificNotificationsEnabled,
+                predictionEnabled,
+                publicBracketEnabled,
+                publicRosterStatsEnabled,
+                fieldAssignmentPublic,
+                matchRoomMediaEnabled,
+                bracketPredictionEnabled,
+                spiritChampionBadgeEnabled,
+                tournamentPageDensity,
+                recapCardStyle,
+                coachChatVisibility,
+                venueName: venueName.trim(),
+                venueAddress: venueAddress.trim(),
+                parkingInfo: parkingInfo.trim(),
+                medicalInfo: medicalInfo.trim(),
+                weatherPolicy: weatherPolicy.trim(),
+                scheduleNotes: scheduleNotes.trim(),
+                sponsorLine: sponsorLine.trim(),
+                publicContactEmail: publicContactEmail.trim(),
             });
             router.back();
         } catch (error: any) {
@@ -180,6 +275,48 @@ export default function TournamentSettingsScreen() {
             </View>
         );
     };
+
+    const renderToggle = (
+        label: string,
+        description: string,
+        value: boolean,
+        onToggle: () => void
+    ) => (
+        <TouchableOpacity
+            style={[styles.toggleRow, value && styles.toggleRowActive]}
+            onPress={onToggle}
+            activeOpacity={0.75}
+        >
+            <View style={{ flex: 1 }}>
+                <Text style={styles.toggleLabel}>{label}</Text>
+                <Text style={styles.toggleDescription}>{description}</Text>
+            </View>
+            <Ionicons name={value ? 'toggle' : 'toggle-outline'} size={30} color={value ? colors.primary : colors.textSecondary} />
+        </TouchableOpacity>
+    );
+
+    const renderSegment = <T extends string>(
+        label: string,
+        value: T,
+        options: { key: T; label: string }[],
+        onChange: (value: T) => void
+    ) => (
+        <View style={styles.inputRow}>
+            <Text style={styles.label}>{label}</Text>
+            <View style={styles.segmentRow}>
+                {options.map((option) => (
+                    <TouchableOpacity
+                        key={option.key}
+                        style={[styles.segmentBtn, value === option.key && styles.segmentBtnActive]}
+                        onPress={() => onChange(option.key)}
+                        activeOpacity={0.8}
+                    >
+                        <Text style={[styles.segmentText, value === option.key && styles.segmentTextActive]}>{option.label}</Text>
+                    </TouchableOpacity>
+                ))}
+            </View>
+        </View>
+    );
 
     if (!tournament) {
         return (
@@ -249,6 +386,42 @@ export default function TournamentSettingsScreen() {
                             value={announcements} 
                             onChangeText={setAnnouncements} 
                         />
+                    </View>
+                </View>
+
+                <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>Tournament Logistics</Text>
+                    <View style={styles.inputRow}>
+                        <Text style={styles.label}>Venue Name</Text>
+                        <TextInput style={styles.input} placeholder="e.g. Riverfront Sports Complex" placeholderTextColor={colors.textSecondary} value={venueName} onChangeText={setVenueName} />
+                    </View>
+                    <View style={styles.inputRow}>
+                        <Text style={styles.label}>Venue Address</Text>
+                        <TextInput style={styles.input} placeholder="Address or field map note" placeholderTextColor={colors.textSecondary} value={venueAddress} onChangeText={setVenueAddress} />
+                    </View>
+                    <View style={styles.inputRow}>
+                        <Text style={styles.label}>Parking / Check-In</Text>
+                        <TextInput style={[styles.input, { minHeight: 72 }]} multiline textAlignVertical="top" placeholder="Where coaches park, where teams check in, tent location..." placeholderTextColor={colors.textSecondary} value={parkingInfo} onChangeText={setParkingInfo} />
+                    </View>
+                    <View style={styles.inputRow}>
+                        <Text style={styles.label}>Medical / Safety</Text>
+                        <TextInput style={[styles.input, { minHeight: 72 }]} multiline textAlignVertical="top" placeholder="Trainer tent, emergency contact, lightning shelter..." placeholderTextColor={colors.textSecondary} value={medicalInfo} onChangeText={setMedicalInfo} />
+                    </View>
+                    <View style={styles.inputRow}>
+                        <Text style={styles.label}>Weather Policy</Text>
+                        <TextInput style={[styles.input, { minHeight: 72 }]} multiline textAlignVertical="top" placeholder="Delay rules, field closure policy, communication channel..." placeholderTextColor={colors.textSecondary} value={weatherPolicy} onChangeText={setWeatherPolicy} />
+                    </View>
+                    <View style={styles.inputRow}>
+                        <Text style={styles.label}>Schedule Notes</Text>
+                        <TextInput style={[styles.input, { minHeight: 72 }]} multiline textAlignVertical="top" placeholder="Observer notes, reseed timing, bracket release plans..." placeholderTextColor={colors.textSecondary} value={scheduleNotes} onChangeText={setScheduleNotes} />
+                    </View>
+                    <View style={styles.inputRow}>
+                        <Text style={styles.label}>Sponsor / Event Line</Text>
+                        <TextInput style={styles.input} placeholder="Presented by..." placeholderTextColor={colors.textSecondary} value={sponsorLine} onChangeText={setSponsorLine} />
+                    </View>
+                    <View style={styles.inputRow}>
+                        <Text style={styles.label}>Public Contact Email</Text>
+                        <TextInput style={styles.input} autoCapitalize="none" keyboardType="email-address" placeholder="td@example.com" placeholderTextColor={colors.textSecondary} value={publicContactEmail} onChangeText={setPublicContactEmail} />
                     </View>
                 </View>
 
@@ -342,6 +515,156 @@ export default function TournamentSettingsScreen() {
                 </View>
 
                 <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>Team-Run Tournament Systems</Text>
+                    {renderToggle(
+                        'Team Self-Serve Mode',
+                        'Teams can use match rooms, start linked recordings, and submit scores themselves.',
+                        teamSelfServeEnabled,
+                        () => setTeamSelfServeEnabled(!teamSelfServeEnabled)
+                    )}
+                    {renderToggle(
+                        'Coach Match Rooms',
+                        'Creates a per-match coach chat for scheduling, field issues, and score discussion.',
+                        coachChatEnabled,
+                        () => setCoachChatEnabled(!coachChatEnabled)
+                    )}
+                    {renderToggle(
+                        'Team Score Submission',
+                        'Lets each side submit scores from their linked recorder flow.',
+                        teamScoreSubmissionEnabled,
+                        () => setTeamScoreSubmissionEnabled(!teamScoreSubmissionEnabled)
+                    )}
+                    {renderToggle(
+                        'TD Score Verification',
+                        'Holds conflicting or team-submitted scores for tournament director review.',
+                        requireScoreVerification,
+                        () => setRequireScoreVerification(!requireScoreVerification)
+                    )}
+                    <View style={styles.inputRow}>
+                        <Text style={styles.label}>Score Challenge Window (Minutes)</Text>
+                        <TextInput
+                            style={styles.input}
+                            placeholder="15"
+                            keyboardType="number-pad"
+                            placeholderTextColor={colors.textSecondary}
+                            value={scoreChallengeWindowMinutes}
+                            onChangeText={setScoreChallengeWindowMinutes}
+                        />
+                    </View>
+                    {renderToggle(
+                        'Mandatory SOTG',
+                        'Requires spirit submissions before team-run match scores can be treated as complete.',
+                        mandatorySpiritEnabled,
+                        () => setMandatorySpiritEnabled(!mandatorySpiritEnabled)
+                    )}
+                    {renderToggle(
+                        'Misconduct / Card Tracking',
+                        'Enables blue, yellow, and red card reports for TD review.',
+                        misconductTrackingEnabled,
+                        () => setMisconductTrackingEnabled(!misconductTrackingEnabled)
+                    )}
+                </View>
+
+                <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>Engagement & Player Identity</Text>
+                    {renderToggle(
+                        'Player Claim Codes',
+                        'Coaches can issue claim codes so players can verify roster links to their accounts.',
+                        playerClaimingEnabled,
+                        () => setPlayerClaimingEnabled(!playerClaimingEnabled)
+                    )}
+                    {renderToggle(
+                        'Seasonal Trading Cards',
+                        'Enables rarity cards, signature move badges, and shareable player identity surfaces.',
+                        tradingCardsEnabled,
+                        () => setTradingCardsEnabled(!tradingCardsEnabled)
+                    )}
+                    {renderToggle(
+                        'Expanded Line Assistant',
+                        'Keeps lineup recommendations and chemistry insights available during game setup.',
+                        lineCallAssistantEnabled,
+                        () => setLineCallAssistantEnabled(!lineCallAssistantEnabled)
+                    )}
+                    {renderToggle(
+                        'Practice Drill KPIs',
+                        'Allows tournament/team reports to suggest drills from tracked game weaknesses.',
+                        practiceKpiEnabled,
+                        () => setPracticeKpiEnabled(!practiceKpiEnabled)
+                    )}
+                    {renderToggle(
+                        'Recap Cards',
+                        'Enables shareable finals, upset, milestone, and player-of-the-match cards.',
+                        recapCardsEnabled,
+                        () => setRecapCardsEnabled(!recapCardsEnabled)
+                    )}
+                    {renderToggle(
+                        'Team-Specific Notifications',
+                        'Lets fans follow only selected teams for live alerts and milestones.',
+                        teamSpecificNotificationsEnabled,
+                        () => setTeamSpecificNotificationsEnabled(!teamSpecificNotificationsEnabled)
+                    )}
+                    {renderToggle(
+                        'Fan Predictions',
+                        'Shows prediction and win-swing features on live games when enabled.',
+                        predictionEnabled,
+                        () => setPredictionEnabled(!predictionEnabled)
+                    )}
+                </View>
+
+                <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>Public Page Customization</Text>
+                    {renderToggle(
+                        'Public Bracket',
+                        'Show bracket and elimination paths to spectators.',
+                        publicBracketEnabled,
+                        () => setPublicBracketEnabled(!publicBracketEnabled)
+                    )}
+                    {renderToggle(
+                        'Public Roster Stats',
+                        'Allow public tournament pages to show linked team/player stat previews.',
+                        publicRosterStatsEnabled,
+                        () => setPublicRosterStatsEnabled(!publicRosterStatsEnabled)
+                    )}
+                    {renderToggle(
+                        'Public Field Assignments',
+                        'Show field names and day labels on spectator match cards.',
+                        fieldAssignmentPublic,
+                        () => setFieldAssignmentPublic(!fieldAssignmentPublic)
+                    )}
+                    {renderToggle(
+                        'Match Room Media',
+                        'Allow coaches to attach stream links or media context inside match rooms.',
+                        matchRoomMediaEnabled,
+                        () => setMatchRoomMediaEnabled(!matchRoomMediaEnabled)
+                    )}
+                    {renderToggle(
+                        'Bracket Predictions',
+                        'Enable fans to predict bracket winners once seeds are published.',
+                        bracketPredictionEnabled,
+                        () => setBracketPredictionEnabled(!bracketPredictionEnabled)
+                    )}
+                    {renderToggle(
+                        'Spirit Champion Badge',
+                        'Show a Spirit Champion badge on the tournament page when SOTG is enabled.',
+                        spiritChampionBadgeEnabled,
+                        () => setSpiritChampionBadgeEnabled(!spiritChampionBadgeEnabled)
+                    )}
+                    {renderSegment('Page Density', tournamentPageDensity, [
+                        { key: 'compact', label: 'Compact' },
+                        { key: 'comfortable', label: 'Comfortable' },
+                    ], setTournamentPageDensity)}
+                    {renderSegment('Recap Card Style', recapCardStyle, [
+                        { key: 'classic', label: 'Classic' },
+                        { key: 'bold', label: 'Bold' },
+                        { key: 'minimal', label: 'Minimal' },
+                    ], setRecapCardStyle)}
+                    {renderSegment('Coach Chat Visibility', coachChatVisibility, [
+                        { key: 'coaches_only', label: 'Coaches Only' },
+                        { key: 'td_visible', label: 'TD Visible' },
+                    ], setCoachChatVisibility)}
+                </View>
+
+                <View style={styles.section}>
                     <Text style={styles.sectionTitle}>Scheduling</Text>
                     {renderDatePicker('Start Date', startDate, showStartDatePicker, setShowStartDatePicker, (e, d) => d && setStartDate(d))}
                     {renderDatePicker('End Date', endDate, showEndDatePicker, setShowEndDatePicker, (e, d) => d && setEndDate(d))}
@@ -428,18 +751,67 @@ const getStyles = (colors: ThemeColors) => {
         inputRow: {
             gap: 8,
         },
+        toggleRow: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 12,
+            padding: 12,
+            borderRadius: Layout.radiusMd,
+            borderWidth: 1,
+            borderColor: colors.border,
+            backgroundColor: colors.background,
+        },
+        toggleRowActive: {
+            borderColor: colors.primary,
+            backgroundColor: colors.primaryLight,
+        },
+        toggleLabel: {
+            ...Typography.body,
+            fontWeight: '700',
+            color: colors.text,
+        },
+        toggleDescription: {
+            ...Typography.bodySmall,
+            color: colors.textSecondary,
+            marginTop: 3,
+        },
+        segmentRow: {
+            flexDirection: 'row',
+            borderRadius: Layout.radiusSm,
+            overflow: 'hidden',
+            borderWidth: 1,
+            borderColor: colors.border,
+        },
+        segmentBtn: {
+            flex: 1,
+            paddingVertical: 10,
+            paddingHorizontal: 8,
+            backgroundColor: colors.surfaceSecondary,
+            alignItems: 'center',
+        },
+        segmentBtnActive: {
+            backgroundColor: colors.primary,
+        },
+        segmentText: {
+            ...Typography.bodySmall,
+            color: colors.textSecondary,
+            fontWeight: '700',
+        },
+        segmentTextActive: {
+            color: colors.onPrimary,
+        },
         label: {
             ...Typography.label,
             color: colors.textSecondary,
         },
         input: {
+            ...Typography.body,
             backgroundColor: colors.background,
             borderWidth: 1,
             borderColor: colors.border,
             borderRadius: Layout.radiusMd,
             padding: 12,
             color: colors.text,
-            ...Typography.body,
         },
         dateBtn: {
             backgroundColor: colors.background,
@@ -449,8 +821,21 @@ const getStyles = (colors: ThemeColors) => {
             padding: 12,
         },
         dateBtnText: {
-            color: colors.text,
             ...Typography.body,
+            color: colors.text,
+        },
+        uploadBtn: {
+            backgroundColor: colors.surfaceSecondary,
+            borderWidth: 1,
+            borderColor: colors.border,
+            borderRadius: Layout.radiusSm,
+            paddingHorizontal: 12,
+            paddingVertical: 8,
+        },
+        uploadBtnText: {
+            ...Typography.button,
+            color: colors.primary,
+            fontSize: 13,
         },
         codeRow: {
             gap: 8,

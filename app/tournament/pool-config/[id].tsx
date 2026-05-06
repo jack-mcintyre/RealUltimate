@@ -36,6 +36,39 @@ export default function PoolConfigScreen() {
 
     const handleSave = async () => {
         if (!tournament) return;
+        const hasPoolProgress = Object.values(tournament.matches || {}).some((match) => (
+            match.stage === 'pool' && (
+                typeof match.teamAScore === 'number'
+                || typeof match.teamBScore === 'number'
+                || !!match.winnerId
+                || !!match.linkedGameId
+                || !!match.linkedGameIdB
+                || match.matchStatus === 'final'
+                || match.matchStatus === 'in_progress'
+            )
+        ));
+        const configChanged = poolCount !== (tournament.poolCount || 2)
+            || poolSize !== (tournament.poolSize || 4)
+            || qualifiersPerPool !== (tournament.qualifiersPerPool || 2)
+            || poolFormat !== (tournament.poolFormat || 'round_robin');
+
+        if (hasPoolProgress && configChanged) {
+            Alert.alert(
+                'Pool Games Already Have Results',
+                'Changing pool settings will rebuild generated pool games. RealUltimate will archive existing scores by team pairing and restore them if that matchup appears again, but the schedule layout can still change.',
+                [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Continue', style: 'destructive', onPress: () => savePoolConfig() },
+                ]
+            );
+            return;
+        }
+
+        savePoolConfig();
+    };
+
+    const savePoolConfig = async () => {
+        if (!tournament) return;
         try {
             await TournamentService.updatePoolConfig(tournament.id, { poolCount, poolSize, qualifiersPerPool, poolFormat });
             Alert.alert('Saved', 'Pool configuration updated.');
@@ -104,6 +137,16 @@ export default function PoolConfigScreen() {
                         <Text style={styles.statLabel}>Advance</Text>
                     </View>
                 </View>
+
+                {/* Pool Count */}
+                {Object.values(tournament.matches || {}).some((match) => match.stage === 'pool' && (typeof match.teamAScore === 'number' || typeof match.teamBScore === 'number' || !!match.winnerId || match.matchStatus === 'final')) && (
+                    <View style={styles.warningBox}>
+                        <Ionicons name="warning-outline" size={18} color={colors.warning} />
+                        <Text style={styles.warningText}>
+                            Some pool games already have results. Changing this setup will rebuild generated games, but matching pairings will keep their archived scores.
+                        </Text>
+                    </View>
+                )}
 
                 {/* Pool Count */}
                 <View style={styles.section}>
@@ -212,6 +255,17 @@ const getStyles = (colors: ThemeColors) => {
         },
         sectionTitle: { ...Typography.subtitle, fontSize: 16 },
         sectionHint: { ...Typography.caption, color: colors.textSecondary, marginTop: -4 },
+        warningBox: {
+            flexDirection: 'row',
+            gap: 10,
+            alignItems: 'flex-start',
+            backgroundColor: colors.surface,
+            borderRadius: 12,
+            padding: 12,
+            borderWidth: 1,
+            borderColor: colors.warning,
+        },
+        warningText: { ...Typography.bodySmall, color: colors.textSecondary, flex: 1 },
         segmentRow: { flexDirection: 'row', gap: 8 },
         segmentBtn: {
             flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: 'center',

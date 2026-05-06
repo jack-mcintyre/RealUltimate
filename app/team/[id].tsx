@@ -1,14 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
+import * as Clipboard from 'expo-clipboard';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { Alert, Image, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { auth } from '../../firebaseConfig';
 import { GameService } from '../services/GameService';
-import { ensureHttps, getHostname, validateSocialExternalUrl } from '../services/linkUtils';
+import { ensureHttps, getHostname, validateExternalUrl, validateSocialExternalUrl } from '../services/linkUtils';
 import { sanitizeAvailability, validateScheduledGameDraft } from '../services/scheduleValidation';
 import { TeamService } from '../services/TeamService';
-import { GameState, ScheduledAvailabilityStatus, ScheduledGame, SocialLinks, Team, TeamJoinCodes, TeamManager } from '../services/types';
+import { GameState, ScheduledAvailabilityStatus, ScheduledGame, SocialLinks, Team, TeamGameLink, TeamJoinCodes, TeamManager, TeamMediaItem } from '../services/types';
 import { getTypography, Layout } from '../theme/DesignSystem';
 import { ThemeColors, useTheme } from '../theme/ThemeContext';
 
@@ -60,7 +61,7 @@ const hexToRgba = (hex: string, alpha: number) => {
 const BADGE_META: Record<string, { label: string; color: string; icon: keyof typeof Ionicons.glyphMap }> = {
     captain: { label: 'Captain', color: '#F59E0B', icon: 'ribbon-outline' },
     handler: { label: 'Handler', color: '#2563EB', icon: 'flash-outline' },
-    cutter: { label: 'Cutter', color: '#16A34A', icon: 'swap-forward-outline' },
+    cutter: { label: 'Cutter', color: '#16A34A', icon: 'play-forward-outline' },
     defender: { label: 'Defender', color: '#DC2626', icon: 'shield-outline' },
     playmaker: { label: 'Playmaker', color: '#7C3AED', icon: 'sparkles-outline' },
     rookie: { label: 'Rookie', color: '#0EA5E9', icon: 'school-outline' },
@@ -70,7 +71,7 @@ const BADGE_META: Record<string, { label: string; color: string; icon: keyof typ
 
 const ROLE_META: Record<string, { label: string; color: string; icon: keyof typeof Ionicons.glyphMap }> = {
     handler: { label: 'Handler', color: '#2563EB', icon: 'flash-outline' },
-    cutter: { label: 'Cutter', color: '#16A34A', icon: 'swap-forward-outline' },
+    cutter: { label: 'Cutter', color: '#16A34A', icon: 'play-forward-outline' },
     hybrid: { label: 'Hybrid', color: '#7C3AED', icon: 'shuffle-outline' },
     o_handler: { label: 'O-Handler', color: '#1D4ED8', icon: 'arrow-forward-outline' },
     o_cutter: { label: 'O-Cutter', color: '#059669', icon: 'arrow-up-outline' },
@@ -78,10 +79,30 @@ const ROLE_META: Record<string, { label: string; color: string; icon: keyof type
     d_cutter: { label: 'D-Cutter', color: '#B91C1C', icon: 'shield-half-outline' },
 };
 
+const LINE_META: Record<string, { label: string; color: string; icon: keyof typeof Ionicons.glyphMap }> = {
+    O: { label: 'O-Line', color: '#2563EB', icon: 'arrow-up-circle-outline' },
+    D: { label: 'D-Line', color: '#DC2626', icon: 'shield-checkmark-outline' },
+    flex: { label: 'Flex', color: '#7C3AED', icon: 'shuffle-outline' },
+};
+
+const POSITION_META: Record<string, { label: string; color: string; icon: keyof typeof Ionicons.glyphMap }> = {
+    handler: { label: 'Handler', color: '#2563EB', icon: 'flash-outline' },
+    cutter: { label: 'Cutter', color: '#16A34A', icon: 'play-forward-outline' },
+    hybrid: { label: 'Hybrid', color: '#7C3AED', icon: 'git-branch-outline' },
+};
+
+const formatRosterDisplayName = (name: string) => {
+    const parts = (name || '').trim().split(/\s+/).filter(Boolean);
+    if (parts.length < 2) return (name || 'Unknown').toUpperCase();
+    const first = parts[0]?.[0] ? `${parts[0][0]}.` : '';
+    return `${parts.slice(1).join(' ')}, ${first}`.toUpperCase();
+};
+
 export default function TeamDashboardScreen() {
     const { id, preview } = useLocalSearchParams<{ id: string; preview?: string }>();
     const [team, setTeam] = useState<Team | null>(null);
     const [pastGames, setPastGames] = useState<GameState[]>([]);
+    const [pendingObserverNeutralGames, setPendingObserverNeutralGames] = useState<{ gameId: string; opponentTeamId?: string }[]>([]);
     const [scheduledGames, setScheduledGames] = useState<ScheduledGame[]>([]);
     const [joinCodes, setJoinCodes] = useState<TeamJoinCodes | null>(null);
     const [isSpectator, setIsSpectator] = useState(false);
@@ -98,6 +119,10 @@ export default function TeamDashboardScreen() {
     // Team Roles UI
     const [showPermissionsModal, setShowPermissionsModal] = useState(false);
     const [showScheduleModal, setShowScheduleModal] = useState(false);
+    const [showAddMediaModal, setShowAddMediaModal] = useState(false);
+    const [mediaTitleInput, setMediaTitleInput] = useState('');
+    const [mediaUrlInput, setMediaUrlInput] = useState('');
+    const [isSavingMedia, setIsSavingMedia] = useState(false);
     const [scheduleOpponentName, setScheduleOpponentName] = useState('');
     const [scheduleLocation, setScheduleLocation] = useState('');
     const [scheduleDate, setScheduleDate] = useState<Date | null>(null);
@@ -133,6 +158,26 @@ export default function TeamDashboardScreen() {
             unsubscribe();
             unsubscribeScheduled();
         };
+    }, [id]);
+
+    useEffect(() => {
+        if (!id) return;
+
+        return TeamService.subscribeToTeamGameLinks(id, (links: Record<string, TeamGameLink>) => {
+            const pending = Object.entries(links || {})
+                .filter(
+                    ([, link]) =>
+                        link &&
+                        link.source === 'observer_neutral' &&
+                        (link.profileInclusion ?? 'pending') === 'pending' &&
+                        link.status === 'final'
+                )
+                .map(([gameId, link]) => ({ gameId, opponentTeamId: link.opponentTeamId }));
+
+            setPendingObserverNeutralGames(pending);
+            GameService.clearPastGamesCacheForTeam(id);
+            GameService.getPastGamesForTeam(id).then(setPastGames).catch(() => {});
+        });
     }, [id]);
 
     useEffect(() => {
@@ -242,12 +287,57 @@ export default function TeamDashboardScreen() {
     };
 
     const handleOpenExternal = async (url: string) => {
-        const normalized = ensureHttps(url || '');
-        if (!normalized || !getHostname(normalized)) {
-            Alert.alert('Invalid URL', 'Please use a valid http or https link.');
+        const validated = validateExternalUrl((url || '').trim());
+        if (!validated.ok) {
+            Alert.alert('Invalid URL', validated.error);
             return;
         }
-        await Linking.openURL(normalized);
+        await Linking.openURL(validated.url);
+    };
+
+    const handleSaveTeamMedia = async () => {
+        if (!team || !currentUserId) return;
+        const normalizedUrl = ensureHttps(mediaUrlInput.trim());
+        const host = getHostname(normalizedUrl);
+        const title = mediaTitleInput.trim();
+        if (!title) {
+            Alert.alert('Title needed', 'Add a short title for this media post.');
+            return;
+        }
+        if (!normalizedUrl || !host) {
+            Alert.alert('Invalid URL', 'Paste a valid YouTube, image, or web link.');
+            return;
+        }
+
+        const lowerUrl = normalizedUrl.toLowerCase();
+        const mediaType: TeamMediaItem['type'] = host.includes('youtube') || host.includes('youtu.be')
+            ? 'youtube'
+            : /\.(png|jpe?g|gif|webp)(\?|$)/i.test(lowerUrl)
+                ? 'image'
+                : 'link';
+
+        const newMedia: TeamMediaItem = {
+            id: `${Date.now()}`,
+            type: mediaType,
+            title,
+            url: normalizedUrl,
+            createdAt: Date.now(),
+        };
+
+        try {
+            setIsSavingMedia(true);
+            await TeamService.updateTeamPageConfig(team.id, currentUserId, {
+                ...pageConfig,
+                media: [newMedia, ...(pageConfig.media || [])].slice(0, 12),
+            });
+            setMediaTitleInput('');
+            setMediaUrlInput('');
+            setShowAddMediaModal(false);
+        } catch {
+            Alert.alert('Could not add media', 'Please check your permissions and try again.');
+        } finally {
+            setIsSavingMedia(false);
+        }
     };
 
     const handleShareTeam = async () => {
@@ -273,6 +363,34 @@ export default function TeamDashboardScreen() {
         await Linking.openURL(validated.url);
     };
 
+    const refreshPastGamesForTeam = async () => {
+        if (!id) return;
+        GameService.clearPastGamesCacheForTeam(id);
+        const history = await GameService.getPastGamesForTeam(id);
+        setPastGames(history);
+    };
+
+    const handleAcceptObserverNeutralGame = async (gameId: string) => {
+        if (!id || !currentUserId) return;
+        try {
+            await TeamService.acceptObserverNeutralGameOnProfile(id, gameId, currentUserId);
+            await refreshPastGamesForTeam();
+            Alert.alert('Added to profile', 'This observer-recorded match is now visible in history and analytics.');
+        } catch {
+            Alert.alert('Something went wrong', 'Could not add this match.');
+        }
+    };
+
+    const handleDeclineObserverNeutralGame = async (gameId: string) => {
+        if (!id || !currentUserId) return;
+        try {
+            await TeamService.declineObserverNeutralGameOnProfile(id, gameId, currentUserId);
+            Alert.alert('Declined', 'This match stays off your public history.');
+        } catch {
+            Alert.alert('Something went wrong', 'Could not update this request.');
+        }
+    };
+
     const handleFollowToggle = async () => {
         if (!team || !currentUserId) return;
         try {
@@ -287,7 +405,6 @@ export default function TeamDashboardScreen() {
     };
 
     const copyToClipboard = async (text: string) => {
-        const Clipboard = require('expo-clipboard');
         await Clipboard.setStringAsync(text);
         if (hideToastTimeoutRef) clearTimeout(hideToastTimeoutRef);
         setShowCopiedToast(true);
@@ -320,7 +437,56 @@ export default function TeamDashboardScreen() {
             setPlayerName('');
             setPlayerNumber('');
         } catch {
-            alert("Failed to add player.");
+            Alert.alert("Failed to add player.");
+        }
+    };
+
+    const parseRosterLine = (line: string) => {
+        const trimmed = line.trim();
+        if (!trimmed) return null;
+
+        const numberMatch = trimmed.match(/^#?(\d{1,3})[\s,.-]+(.+)$/);
+        const namePart = (numberMatch ? numberMatch[2] : trimmed)
+            .replace(/\b(O-Line|D-Line|O|D|Flex|Handler|Cutter|Hybrid)\b/gi, '')
+            .replace(/[|,]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        const lower = trimmed.toLowerCase();
+        const primaryLine = /\bd-line\b|\bd\b/.test(lower) ? 'D' : /\bo-line\b|\bo\b/.test(lower) ? 'O' : 'flex';
+        const position = lower.includes('handler') ? 'handler' : lower.includes('cutter') ? 'cutter' : 'hybrid';
+
+        return {
+            name: namePart || trimmed,
+            number: numberMatch?.[1] || '',
+            primaryLine: primaryLine as 'O' | 'D' | 'flex',
+            position: position as 'handler' | 'cutter' | 'hybrid',
+        };
+    };
+
+    const handlePasteRoster = async () => {
+        if (!team) return;
+        const uid = auth.currentUser?.uid;
+        if (!uid) return;
+
+        const clipboard = await Clipboard.getStringAsync();
+        const parsed = clipboard
+            .split(/\r?\n/)
+            .map(parseRosterLine)
+            .filter(Boolean)
+            .slice(0, 60) as { name: string; number: string; primaryLine: 'O' | 'D' | 'flex'; position: 'handler' | 'cutter' | 'hybrid' }[];
+
+        if (!parsed.length) {
+            Alert.alert('Paste Roster', 'Copy one player per line first. Optional format: "#12 Jane Smith O Handler".');
+            return;
+        }
+
+        try {
+            for (const player of parsed) {
+                await TeamService.addPlayer(team.id, player.name, uid, player.number, player.primaryLine, player.position);
+            }
+            Alert.alert('Roster Imported', `Added ${parsed.length} players from your clipboard.`);
+        } catch (error: any) {
+            Alert.alert('Import Failed', error?.message || 'Could not import this roster.');
         }
     };
 
@@ -341,7 +507,6 @@ export default function TeamDashboardScreen() {
         showFanCount: pageConfig.settings?.showFanCount ?? true,
     };
     const canSeeAdvancedStats = pageSettings.advancedStatsPublic || canEditTeamPage;
-    const canSeeMedia = pageSettings.mediaPublic || canEditTeamPage;
 
     const teamAvatarUrl = pageConfig.branding?.avatarUrl?.trim() || '';
     const teamBannerUrl = pageConfig.branding?.bannerUrl?.trim() || '';
@@ -350,6 +515,7 @@ export default function TeamDashboardScreen() {
     const teamAccentSoft = hexToRgba(teamAccent, 0.28);
     const teamAccentBg = hexToRgba(teamAccent, 0.12);
     const teamMedia = (pageConfig.media || []).slice(0, 6);
+    const showTeamMediaSection = canEditTeamPage || (pageSettings.mediaPublic && teamMedia.length > 0);
 
     const announcement = pageConfig.announcement;
     const announcementActive = !!announcement?.message && (!announcement.expiresAt || announcement.expiresAt > Date.now());
@@ -358,7 +524,10 @@ export default function TeamDashboardScreen() {
         if (typeof game.scheduledAt !== 'number') return true;
         return game.scheduledAt >= Date.now();
     }) || null;
+    /** Coaches/managers see per-player avail. icons next to roster when there is an upcoming/TBD scheduled game. */
     const canSeeAvailabilityStatus = canEditTeamPage && !!nextScheduledGame;
+    /** Only finalized games belong in Previous Games / win stats. */
+    const finishedPastGames = pastGames.filter((g) => g.isGameActive === false);
 
     const socialEntries = [
         { key: 'x', label: 'X', url: pageConfig.socialLinks?.x || '' },
@@ -382,7 +551,7 @@ export default function TeamDashboardScreen() {
             if (confirmed) {
                 if (auth.currentUser) {
                     TeamService.deleteTeam(team.id, auth.currentUser.uid)
-                        .then(() => router.replace('/teams'))
+                        .then(() => router.replace('/(tabs)/teams'))
                         .catch(() => alert("Failed to delete team."));
                 }
             }
@@ -396,7 +565,7 @@ export default function TeamDashboardScreen() {
                         try {
                             if (auth.currentUser) {
                                 await TeamService.deleteTeam(team.id, auth.currentUser.uid);
-                                router.replace('/teams');
+                                router.replace('/(tabs)/teams');
                             }
                         } catch {
                             Alert.alert("Error", "Failed to delete team.");
@@ -478,11 +647,11 @@ export default function TeamDashboardScreen() {
             ]
         );
     };
-    const availableYears = ['All Time', ...Array.from(new Set(pastGames.map(g => {
+    const availableYears = ['All Time', ...Array.from(new Set(finishedPastGames.map(g => {
         return g.history?.length ? new Date(g.history[g.history.length-1].timestamp).getFullYear().toString() : 'Unknown';
     }))).filter(y => y !== 'Unknown').sort((a,b) => b.localeCompare(a))];
 
-    const filteredGames = pastGames.filter(g => {
+    const filteredGames = finishedPastGames.filter(g => {
         if (selectedYear === 'All Time') return true;
         if (!g.history?.length) return false;
         return new Date(g.history[g.history.length-1].timestamp).getFullYear().toString() === selectedYear;
@@ -490,13 +659,28 @@ export default function TeamDashboardScreen() {
 
     const totalGames = filteredGames.length;
     let wins = 0;
+    let losses = 0;
+    let ties = 0;
+    let pointsFor = 0;
+    let pointsAgainst = 0;
     filteredGames.forEach(g => {
         const isTeam1 = g.team1Id === team.id;
         const ourScore = isTeam1 ? g.score1 : g.score2;
         const theirScore = isTeam1 ? g.score2 : g.score1;
+        pointsFor += ourScore || 0;
+        pointsAgainst += theirScore || 0;
         if (ourScore > theirScore) wins++;
+        else if (theirScore > ourScore) losses++;
+        else ties++;
     });
     const winrate = totalGames > 0 ? Math.round((wins / totalGames) * 100) : 0;
+    const winPctDecimal = totalGames > 0 ? wins / totalGames : 0;
+    const avgPointDiff = totalGames > 0 ? (pointsFor - pointsAgainst) / totalGames : 0;
+    /** SPI = (win %)×100 + (avg margin)×10 — same filter as match list. */
+    const spiRaw = winPctDecimal * 100 + avgPointDiff * 10;
+    const spiScore = totalGames > 0 ? Math.round(spiRaw * 10) / 10 : 0;
+    const pointsForAvg = totalGames > 0 ? (pointsFor / totalGames).toFixed(1) : '0.0';
+    const pointsAgainstAvg = totalGames > 0 ? (pointsAgainst / totalGames).toFixed(1) : '0.0';
 
     const chronGames = [...filteredGames].sort((a, b) => {
         const aTs = a.history?.length ? a.history[a.history.length - 1].timestamp : 0;
@@ -515,6 +699,26 @@ export default function TeamDashboardScreen() {
         }
         break;
     }
+
+    const lastFiveRecord = chronGames.slice(0, 5).reduce(
+        (record, game) => {
+            const isTeam1 = game.team1Id === team.id;
+            const ourScore = isTeam1 ? game.score1 : game.score2;
+            const theirScore = isTeam1 ? game.score2 : game.score1;
+            if (ourScore > theirScore) record.wins += 1;
+            else if (theirScore > ourScore) record.losses += 1;
+            else record.ties += 1;
+            return record;
+        },
+        { wins: 0, losses: 0, ties: 0 }
+    );
+
+    const formSummary =
+        currentWinStreak > 0
+            ? `+${currentWinStreak} win streak`
+            : [ties > 0 ? `${ties} draw${ties === 1 ? '' : 's'}` : '', losses > 0 ? `${losses} loss${losses === 1 ? '' : 'es'}` : '']
+                  .filter(Boolean)
+                  .join(' · ') || 'Even';
 
     const chemistryPairs: Record<string, { thrower: string; receiver: string; attempts: number; completions: number }> = {};
     filteredGames.forEach((game) => {
@@ -602,7 +806,7 @@ export default function TeamDashboardScreen() {
     const epvPositiveRate = epvSamples > 0 ? Math.round((epvPositive / epvSamples) * 100) : 0;
 
     return (
-        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.container}>
+        <View style={styles.container}>
             <View style={styles.topAppBar}>
                 <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
                     <Ionicons name="arrow-back" size={24} color={colors.text} />
@@ -637,7 +841,7 @@ export default function TeamDashboardScreen() {
                 </View>
             )}
 
-            <ScrollView style={styles.mainContent} contentContainerStyle={{ paddingBottom: 60 }} showsVerticalScrollIndicator={false}>
+            <ScrollView style={styles.mainContent} contentContainerStyle={styles.mainContentContainer} showsVerticalScrollIndicator={false}>
                 
                 {/* TEAM INFO CARD */}
                 <View style={[styles.infoCard, { borderColor: teamAccentSoft }]}>
@@ -749,38 +953,63 @@ export default function TeamDashboardScreen() {
                 </View>
 
                 {/* ACTION BUTTONS */}
-                <View style={styles.actionRow}>
-                    {isCoach ? (
-                        <TouchableOpacity 
-                            style={[styles.primaryActionBtn, { flex: 1, marginRight: team.activeGameId ? 16 : 0, backgroundColor: teamAccent }]}
-                            onPress={() => router.push(`/game/record/${team.id}` as any)}
-                            activeOpacity={0.8}
-                        >
-                            <Ionicons name={team.activeGameId ? "play" : "videocam"} size={24} color={colors.onPrimary} style={{ marginBottom: 8 }} />
-                            <Text style={styles.primaryActionBtnText}>{team.activeGameId ? 'Resume Match' : 'Record Match'}</Text>
-                        </TouchableOpacity>
-                    ) : null}
+                        <View style={styles.actionRow}>
+                            {isCoach ? (
+                                <TouchableOpacity 
+                                    style={[styles.primaryActionBtn, { flex: 1, marginRight: team.activeGameId ? 8 : 0, backgroundColor: teamAccent }]}
+                                    onPress={() => router.push(`/game/record/${team.id}` as any)}
+                                    activeOpacity={0.8}
+                                >
+                                    <Ionicons name={team.activeGameId ? "play" : "videocam"} size={24} color={colors.onPrimary} style={{ marginBottom: 8 }} />
+                                    <Text style={styles.primaryActionBtnText}>{team.activeGameId ? 'Resume Match' : 'Record Match'}</Text>
+                                </TouchableOpacity>
+                            ) : null}
 
-                    {team.activeGameId && (
-                        <TouchableOpacity 
-                            style={[styles.liveActionBtn, { flex: 1 }]}
-                            onPress={() => router.push(`/game/watch/${team.id}` as any)}
-                            activeOpacity={0.8}
-                        >
-                            <Ionicons name="radio" size={24} color={colors.onPrimary} style={{ marginBottom: 8 }} />
-                            <Text style={styles.primaryActionBtnText}>Watch Live</Text>
-                        </TouchableOpacity>
-                    )}
-                </View>
+                            {team.activeGameId && (
+                                <TouchableOpacity 
+                                    style={[styles.liveActionBtn, { flex: 1 }]}
+                                    onPress={() => router.push(`/game/watch/${team.id}` as any)}
+                                    activeOpacity={0.8}
+                                >
+                                    <Ionicons name="radio" size={24} color={colors.onPrimary} style={{ marginBottom: 8 }} />
+                                    <Text style={styles.primaryActionBtnText}>Watch Live</Text>
+                                </TouchableOpacity>
+                            )}
+                        </View>
 
                 {/* MEDIA HIGHLIGHTS */}
-                {canSeeMedia && teamMedia.length > 0 && (
+                {showTeamMediaSection && (
                     <View style={{ marginBottom: 20 }}>
-                        <View style={styles.sectionHeader}>
+                        <View style={[styles.sectionHeader, styles.teamMediaSectionHeader]}>
                             <Text style={styles.sectionTitle}>Team Media</Text>
+                            {canEditTeamPage && (
+                                <TouchableOpacity
+                                    style={[styles.addMediaInlineBtn, { borderColor: teamAccent, backgroundColor: teamAccentBg }]}
+                                    onPress={() => setShowAddMediaModal(true)}
+                                    activeOpacity={0.85}
+                                >
+                                    <Ionicons name="add-circle-outline" size={15} color={teamAccent} />
+                                    <Text style={[styles.addMediaInlineText, { color: teamAccent }]}>Add Post</Text>
+                                </TouchableOpacity>
+                            )}
                         </View>
                         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                             <View style={styles.mediaHighlightsRow}>
+                                {canEditTeamPage && teamMedia.length === 0 && (
+                                    <TouchableOpacity
+                                        style={[styles.mediaCard, styles.addMediaCard, { borderColor: teamAccentSoft }]}
+                                        onPress={() => setShowAddMediaModal(true)}
+                                        activeOpacity={0.85}
+                                    >
+                                        <View style={[styles.mediaCardIconBox, { backgroundColor: teamAccentBg }]}>
+                                            <Ionicons name="add" size={22} color={teamAccent} />
+                                        </View>
+                                        <Text style={styles.mediaCardTitle} numberOfLines={1}>Add team post</Text>
+                                        <View style={styles.mediaCardMetaRow}>
+                                            <Text style={styles.mediaCardMetaText} numberOfLines={1}>Share a clip, photo, or link</Text>
+                                        </View>
+                                    </TouchableOpacity>
+                                )}
                                 {teamMedia.map((media) => (
                                     <TouchableOpacity
                                         key={media.id}
@@ -823,40 +1052,21 @@ export default function TeamDashboardScreen() {
                 <View style={styles.sectionHeader}>
                     <Text style={styles.sectionTitle}>Roster ({team.players ? Object.keys(team.players).length : 0})</Text>
                     {canSeeAvailabilityStatus && (
-                        <Text style={styles.rosterHintText}>Circle check/x beside each name indicates next game availability.</Text>
+                        <Text style={styles.rosterHintText}>Next game: ✓ in · ✕ out · ? not set (coaches only).</Text>
                     )}
                 </View>
 
-                {isCoach && (
-                    <View style={[styles.addPlayerContainer, { borderColor: teamAccentSoft }]}>
-                        <View style={styles.inputRow}>
-                            <TextInput
-                                style={[styles.input, { flex: 3 }]}
-                                placeholder="Player Name"
-                                placeholderTextColor={colors.textSecondary}
-                                value={playerName}
-                                onChangeText={setPlayerName}
-                            />
-                            <TextInput
-                                style={[styles.inputNum, { flex: 1, marginLeft: 12 }]}
-                                placeholder="#"
-                                placeholderTextColor={colors.textSecondary}
-                                keyboardType="numeric"
-                                value={playerNumber}
-                                onChangeText={setPlayerNumber}
-                            />
-                        </View>
-                        <TouchableOpacity style={[styles.addPlayerBtn, { borderColor: teamAccent, backgroundColor: teamAccentBg }]} onPress={handleAddPlayer}>
-                            <Ionicons name="add" size={20} color={teamAccent} />
-                            <Text style={[styles.addPlayerBtnText, { color: teamAccent }]}>Add Player</Text>
-                        </TouchableOpacity>
+                <View style={styles.rosterShowcase}>
+                    <View style={[styles.rosterShowcaseHeader, { borderBottomColor: teamAccentSoft }]}>
+                        <Text style={styles.rosterShowcaseTitle}>Active Roster</Text>
+                        <Text style={styles.rosterShowcaseSub}>{Object.keys(team.players || {}).length} players</Text>
                     </View>
-                )}
-
-                <View style={styles.rosterList}>
                     {team.players && Object.values(team.players).map((p) => (
                         (() => {
                             const roleMeta = p.role ? ROLE_META[p.role] : undefined;
+                            const lineMeta = LINE_META[p.primaryLine || 'flex'];
+                            const positionMeta = POSITION_META[p.position || 'hybrid'];
+                            const lineDisplayMeta = lineMeta || roleMeta;
                             const badgeMeta = p.badge ? BADGE_META[p.badge] : undefined;
                             const availability = nextScheduledGame?.availability?.[p.id];
                             const availabilityYes = availability === 'yes';
@@ -865,60 +1075,86 @@ export default function TeamDashboardScreen() {
                             return (
                         <TouchableOpacity 
                             key={p.id} 
-                            style={[styles.playerCard, { borderColor: teamAccentSoft, borderLeftWidth: 3, borderLeftColor: teamAccent }]} 
+                            style={[styles.playerCard, { borderColor: teamAccentSoft }]} 
                             onPress={() => router.push(`/team/${team.id}/player/${p.id}`)}
                             activeOpacity={0.7}
                         >
-                            <View style={[styles.playerInfo, { flex: 1 }]}> 
+                            <View style={[styles.playerInfo, { flex: 1 }]}>
                                 <View style={styles.playerNumberBox}>
                                     <Text style={styles.playerNumberText}>{p.number || '--'}</Text>
                                 </View>
-                                <View style={{ flex: 1 }}>
+                                <View style={styles.playerTextBlock}>
                                     <View style={styles.playerNameRow}>
-                                        <Text style={[styles.playerNameText, { color: teamAccent }]} numberOfLines={1}>{p.name}</Text>
-                                        {canSeeAvailabilityStatus && (availabilityYes || availabilityNo) && (
-                                            <Ionicons
-                                                name={availabilityYes ? 'checkmark-circle' : 'close-circle'}
-                                                size={16}
-                                                color={availabilityYes ? colors.success : colors.error}
-                                            />
-                                        )}
+                                        <Text style={[styles.playerNameText, { color: colors.text }]} numberOfLines={1}>
+                                            {formatRosterDisplayName(p.name)}
+                                        </Text>
+                                        {(lineDisplayMeta || positionMeta || badgeMeta) ? (
+                                            <View style={styles.playerMetaInline}>
+                                                {lineDisplayMeta && (
+                                                    <View style={[styles.playerRolePill, { borderColor: lineDisplayMeta.color, backgroundColor: colors.surfaceSecondary }]}>
+                                                        <Ionicons name={lineDisplayMeta.icon} size={9} color={lineDisplayMeta.color} />
+                                                        <Text style={[styles.playerRolePillText, { color: lineDisplayMeta.color }]}>{lineDisplayMeta.label}</Text>
+                                                    </View>
+                                                )}
+                                                {positionMeta && (
+                                                    <View style={[styles.playerRolePill, { borderColor: positionMeta.color, backgroundColor: colors.surfaceSecondary }]}>
+                                                        <Ionicons name={positionMeta.icon} size={9} color={positionMeta.color} />
+                                                        <Text style={[styles.playerRolePillText, { color: positionMeta.color }]}>{positionMeta.label}</Text>
+                                                    </View>
+                                                )}
+                                                {badgeMeta && (
+                                                    <View style={[styles.playerBadgePill, { borderColor: badgeMeta.color, backgroundColor: colors.surfaceSecondary }]}>
+                                                        <Ionicons name={badgeMeta.icon} size={10} color={badgeMeta.color} />
+                                                        <Text style={[styles.playerBadgePillText, { color: badgeMeta.color }]}>{badgeMeta.label}</Text>
+                                                    </View>
+                                                )}
+                                            </View>
+                                        ) : null}
                                     </View>
-                                    {(roleMeta || badgeMeta) && (
-                                        <View style={styles.playerMetaRow}>
-                                            {roleMeta && (
-                                                <View style={[styles.playerRolePill, { borderColor: roleMeta.color, backgroundColor: colors.surfaceSecondary }]}>
-                                                    <Ionicons name={roleMeta.icon} size={11} color={roleMeta.color} />
-                                                    <Text style={[styles.playerRolePillText, { color: roleMeta.color }]}>{roleMeta.label}</Text>
-                                                </View>
-                                            )}
-                                            {badgeMeta && (
-                                                <View style={[styles.playerBadgePill, { borderColor: badgeMeta.color, backgroundColor: colors.surfaceSecondary }]}>
-                                                    <Ionicons name={badgeMeta.icon} size={11} color={badgeMeta.color} />
-                                                    <Text style={[styles.playerBadgePillText, { color: badgeMeta.color }]}>{badgeMeta.label}</Text>
-                                                </View>
-                                            )}
-                                        </View>
-                                    )}
                                 </View>
                             </View>
-                            {canEditTeamPage && (
-                                <TouchableOpacity style={styles.playerDelBtn} onPress={() => handleRemovePlayer(p.id, p.name)}>
-                                    <Ionicons name="close" size={20} color={colors.textSecondary} />
-                                </TouchableOpacity>
-                            )}
+                            {canSeeAvailabilityStatus ? (
+                                <View
+                                    style={styles.playerAvailCoachCol}
+                                    accessibilityLabel={
+                                        availabilityYes ? 'Available next game' : availabilityNo ? 'Not available next game' : 'Availability not set'
+                                    }
+                                >
+                                    <Ionicons
+                                        name={availabilityYes ? 'checkmark-circle' : availabilityNo ? 'close-circle' : 'help-circle-outline'}
+                                        size={22}
+                                        color={
+                                            availabilityYes ? colors.success : availabilityNo ? colors.error : colors.textSecondary
+                                        }
+                                    />
+                                </View>
+                            ) : null}
+                            <Ionicons name="chevron-forward" size={18} color={colors.textSecondary} />
                         </TouchableOpacity>
                             );
                         })()
                     ))}
+                    {canEditTeamPage && (
+                        <View style={styles.rosterManageFooter}>
+                            <TouchableOpacity
+                                style={[styles.rosterManageBtn, { backgroundColor: teamAccent, borderColor: teamAccent }]}
+                                onPress={() => router.push(`/team/${team.id}/manage` as any)}
+                                activeOpacity={0.85}
+                            >
+                                <Ionicons name="people-outline" size={16} color={colors.onPrimary} />
+                                <Text style={styles.rosterManageBtnText}>Manage Roster</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.rosterManageBtn, styles.rosterManageSecondaryBtn, { borderColor: teamAccent, backgroundColor: teamAccentBg }]}
+                                onPress={() => router.push(`/team/${team.id}/manage` as any)}
+                                activeOpacity={0.85}
+                            >
+                                <Ionicons name="shield-checkmark-outline" size={16} color={teamAccent} />
+                                <Text style={[styles.rosterManageBtnText, { color: teamAccent }]}>Team Permissions</Text>
+                            </TouchableOpacity>
+                        </View>
+                    )}
                 </View>
-
-                {isCoach && (
-                    <TouchableOpacity style={[styles.permissionsBtn, { borderColor: teamAccentSoft, backgroundColor: teamAccentBg }]} onPress={() => setShowPermissionsModal(true)} activeOpacity={0.8}>
-                        <Ionicons name="shield-checkmark" size={20} color={teamAccent} />
-                        <Text style={[styles.permissionsBtnText, { color: teamAccent }]}>Manage Team Permissions</Text>
-                    </TouchableOpacity>
-                )}
 
                 {/* SCHEDULED GAMES */}
                 {
@@ -1012,8 +1248,65 @@ export default function TeamDashboardScreen() {
                     </View>
                 }
 
+                {/* PENDING OBSERVER-NEUTRAL MATCHES */}
+                {pendingObserverNeutralGames.length > 0 && preview !== 'public' && (
+                    <View style={{ marginTop: 26 }}>
+                        <View style={[styles.pendingObserverHeader, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+                            <Text style={[styles.pendingObserverTitle, { color: colors.text }]}>Observer-recorded match</Text>
+                            <Text style={[styles.pendingObserverSubtitle, { color: colors.textSecondary }]}>
+                                A scorer used both fan codes without coach access. Add to your timeline and stats — or decline to keep this private.
+                            </Text>
+                        </View>
+                        {pendingObserverNeutralGames.map((entry) => (
+                            <View
+                                key={`pending-obs-${entry.gameId}`}
+                                style={[styles.pendingObserverCard, { borderColor: colors.border, backgroundColor: colors.surface }]}
+                            >
+                                <Text style={[styles.pendingObserverCardTitle, { color: colors.text }]}>
+                                    Match ready for review
+                                </Text>
+                                <Text style={[styles.pendingObserverSubtitle, { color: colors.textSecondary }]}>
+                                    Recorded neutrally with both fan codes. Review the recap, then accept to include stats or decline.
+                                </Text>
+                                <View style={styles.pendingObserverActions}>
+                                    <TouchableOpacity
+                                        style={[styles.pendingObserverGhostBtn, { borderColor: colors.border }]}
+                                        onPress={() => router.push(`/game/history/${entry.gameId}` as any)}
+                                        activeOpacity={0.82}
+                                    >
+                                        <Text style={[styles.pendingObserverGhostBtnText, { color: colors.primary }]}>Review</Text>
+                                    </TouchableOpacity>
+                                    {canEditTeamPage && (
+                                        <>
+                                            <TouchableOpacity
+                                                style={[styles.pendingObserverPrimaryBtn, { backgroundColor: colors.success }]}
+                                                onPress={() => handleAcceptObserverNeutralGame(entry.gameId)}
+                                                activeOpacity={0.88}
+                                            >
+                                                <Text style={[styles.pendingObserverPrimaryBtnText, { color: '#fff' }]}>Accept</Text>
+                                            </TouchableOpacity>
+                                            <TouchableOpacity
+                                                style={[styles.pendingObserverDangerBtn, { borderColor: colors.error }]}
+                                                onPress={() => handleDeclineObserverNeutralGame(entry.gameId)}
+                                                activeOpacity={0.85}
+                                            >
+                                                <Text style={[styles.pendingObserverDangerBtnText, { color: colors.error }]}>Decline</Text>
+                                            </TouchableOpacity>
+                                        </>
+                                    )}
+                                </View>
+                            </View>
+                        ))}
+                        {!canEditTeamPage && currentUserId && (
+                            <Text style={[styles.pendingObserverFanNote, { color: colors.textSecondary }]}>
+                                Only coaches/managers can accept or decline. Ask your coach to decide.
+                            </Text>
+                        )}
+                    </View>
+                )}
+
                 {/* PAST GAMES & ANALYTICS */}
-                {pastGames.length > 0 && (
+                {finishedPastGames.length > 0 && (
                     <View style={{ marginTop: 24 }}>
                         <View style={styles.sectionHeader}>
                             <Text style={styles.sectionTitle}>Match History & Stats</Text>
@@ -1039,20 +1332,52 @@ export default function TeamDashboardScreen() {
                             </View>
                         </ScrollView>
                         
-                        {/* QUICK STATS */}
-                        <View style={{ flexDirection: 'row', gap: 12, marginBottom: 24 }}>
-                            <View style={[styles.quickStatCard, { borderColor: teamAccentSoft }]}>
-                                <Text style={styles.statValue}>{totalGames}</Text>
-                                <Text style={styles.statLabel}>Matches</Text>
+                        {/* QUICK STATS TAPE */}
+                        <View style={[styles.statsTape, { borderColor: teamAccentSoft }]}>
+                            <View style={styles.statsTapeCell}>
+                                <Text style={styles.statsTapeLabel}>Win rate</Text>
+                                <Text style={styles.statsTapeValue}>{totalGames > 0 ? `${winrate}%` : '—'}</Text>
                             </View>
-                            <View style={[styles.quickStatCard, { borderColor: teamAccentSoft }]}>
-                                <Text style={[styles.statValue, { color: teamAccent }]}>{winrate}%</Text>
-                                <Text style={styles.statLabel}>Win Rate</Text>
+                            <View style={[styles.statsTapeCell, { backgroundColor: teamAccentBg }]}>
+                                <Text style={[styles.statsTapeLabel, { color: teamAccent }]}>Points For/Game</Text>
+                                <Text style={[styles.statsTapeValue, { color: teamAccent }]}>{pointsForAvg}</Text>
                             </View>
-                            <View style={[styles.quickStatCard, { borderColor: teamAccentSoft }]}>
-                                <Text style={[styles.statValue, { color: colors.success }]}>{wins}</Text>
-                                <Text style={styles.statLabel}>Total Wins</Text>
-                                {currentWinStreak >= 3 && <Text style={styles.winStreakInlineText}>{currentWinStreak} Win Streak</Text>}
+                            <View style={styles.statsTapeCell}>
+                                <Text style={styles.statsTapeLabel}>Points Against/Game</Text>
+                                <Text style={styles.statsTapeValue}>{pointsAgainstAvg}</Text>
+                            </View>
+                        </View>
+
+                        <View style={[styles.efficiencyCard, { backgroundColor: teamAccent, borderColor: teamAccent }]}>
+                            <Text style={styles.efficiencyKicker}>Team Rating</Text>
+                            <Text style={styles.efficiencyExplainer}>
+                                Win rate and average scoring margin combined into one local index for this filter.
+                            </Text>
+                            <View style={styles.efficiencyScoreRow}>
+                                <Text style={styles.efficiencyScore}>{totalGames > 0 ? spiScore : '—'}</Text>
+                                <Text style={styles.efficiencyDelta}>
+                                    {totalGames > 0
+                                        ? `${winrate}% wins · ${avgPointDiff >= 0 ? '+' : ''}${avgPointDiff.toFixed(1)} avg margin`
+                                        : formSummary}
+                                </Text>
+                            </View>
+                            <View style={[styles.efficiencyMetaRow, { flexWrap: 'wrap', gap: 20 }]}>
+                                <View>
+                                    <Text style={styles.efficiencyMetaLabel}>Record</Text>
+                                    <Text style={styles.efficiencyMetaValue}>{wins}-{losses}-{ties}</Text>
+                                </View>
+                                <View>
+                                    <Text style={styles.efficiencyMetaLabel}>Last 5</Text>
+                                    <Text style={styles.efficiencyMetaValue}>
+                                        {lastFiveRecord.wins}-{lastFiveRecord.losses}-{lastFiveRecord.ties}
+                                    </Text>
+                                </View>
+                                <View>
+                                    <Text style={styles.efficiencyMetaLabel}>Win streak</Text>
+                                    <Text style={styles.efficiencyMetaValue}>
+                                        {currentWinStreak > 0 ? `W${currentWinStreak}` : '—'}
+                                    </Text>
+                                </View>
                             </View>
                         </View>
 
@@ -1086,9 +1411,13 @@ export default function TeamDashboardScreen() {
                         {filteredGames.length === 0 ? (
                             <Text style={{ ...getTypography(colors).bodySmall, textAlign: 'center', marginTop: 12 }}>No matches recorded for {selectedYear}.</Text>
                         ) : (
-                            filteredGames.map((game) => {
+                            <View style={styles.recentFormCard}>
+                                <View style={styles.recentFormHeader}>
+                                    <Text style={styles.recentFormTitle}>Previous Games</Text>
+                                </View>
+                                {filteredGames.map((game) => {
                                 const isTeam1 = game.team1Id === team.id;
-                                const opponentName = isTeam1 ? game.team2Name || "Opponent" : team.name;
+                                const opponentName = isTeam1 ? game.team2Name || "Opponent" : "Opponent";
                             const ourScore = isTeam1 ? game.score1 : game.score2;
                             const theirScore = isTeam1 ? game.score2 : game.score1;
                             const dateText = game.history && game.history.length > 0 
@@ -1096,10 +1425,39 @@ export default function TeamDashboardScreen() {
                                 : "Unknown Date";
                             const isWin = ourScore > theirScore;
                             const isLoss = theirScore > ourScore;
-                            const bgColor = isWin ? colors.success : (isLoss ? colors.error : colors.surfaceSecondary);
-                            const textColor = (isWin || isLoss) ? colors.onPrimary : colors.text;
-                            const subTextColor = (isWin || isLoss) ? 'rgba(255,255,255,0.8)' : colors.textSecondary;
-                            const scoreBoxBg = (isWin || isLoss) ? 'rgba(0,0,0,0.15)' : (isDark ? 'rgba(255,255,255,0.05)' : colors.surface);
+                            const isTie = ourScore === theirScore;
+                            const bgColor = isWin
+                                ? colors.success
+                                : isLoss
+                                  ? colors.error
+                                  : isTie
+                                    ? isDark
+                                      ? 'rgba(245, 158, 11, 0.22)'
+                                      : '#FEF3C7'
+                                    : colors.surfaceSecondary;
+                            const textColor = (isWin || isLoss)
+                                ? colors.onPrimary
+                                : isTie
+                                  ? isDark
+                                    ? '#FDE68A'
+                                    : '#78350F'
+                                  : colors.text;
+                            const subTextColor = (isWin || isLoss)
+                                ? 'rgba(255,255,255,0.8)'
+                                : isTie
+                                  ? isDark
+                                    ? 'rgba(253, 230, 138, 0.85)'
+                                    : '#92400E'
+                                  : colors.textSecondary;
+                            const scoreBoxBg = (isWin || isLoss)
+                                ? 'rgba(0,0,0,0.15)'
+                                : isTie
+                                  ? isDark
+                                    ? 'rgba(0,0,0,0.25)'
+                                    : 'rgba(146, 64, 14, 0.12)'
+                                  : isDark
+                                    ? 'rgba(255,255,255,0.05)'
+                                    : colors.surface;
 
                             return (
                                 <TouchableOpacity 
@@ -1112,6 +1470,9 @@ export default function TeamDashboardScreen() {
                                         <Text style={[styles.historyOpponent, { color: textColor }]} numberOfLines={1}>vs {opponentName}</Text>
                                         <Text style={[styles.historyDate, { color: subTextColor }]}>{dateText}</Text>
                                     </View>
+                                    <View style={[styles.historyResultPill, { backgroundColor: scoreBoxBg }]}>
+                                        <Text style={[styles.historyResultText, { color: textColor }]}>{isWin ? 'W' : isLoss ? 'L' : 'T'}</Text>
+                                    </View>
                                     <View style={[styles.historyScoreBox, { backgroundColor: scoreBoxBg }]}>
                                         <Text style={[styles.historyScoreText, { color: textColor }]}>
                                             {ourScore} - {theirScore}
@@ -1119,7 +1480,8 @@ export default function TeamDashboardScreen() {
                                     </View>
                                 </TouchableOpacity>
                             );
-                        })
+                                })}
+                            </View>
                         )}
                     </View>
                 )}
@@ -1291,6 +1653,60 @@ export default function TeamDashboardScreen() {
                 </View>
             </Modal>
 
+            <Modal visible={showAddMediaModal} animationType="fade" transparent={true} onRequestClose={() => setShowAddMediaModal(false)}>
+                <View style={styles.addMediaModalRoot}>
+                    <TouchableOpacity style={styles.addMediaModalBackdrop} activeOpacity={1} onPress={() => setShowAddMediaModal(false)} />
+                    <View style={styles.addMediaModalSheetAnchor} pointerEvents="box-none">
+                        <KeyboardAvoidingView
+                            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                            style={styles.addMediaModalKav}
+                            keyboardVerticalOffset={Platform.OS === 'ios' ? 40 : 0}
+                        >
+                            <View style={styles.modalContent}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                                    <Text style={styles.modalTitle}>Add Post</Text>
+                                    <TouchableOpacity onPress={() => setShowAddMediaModal(false)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+                                        <Ionicons name="close" size={24} color={colors.textSecondary} />
+                                    </TouchableOpacity>
+                                </View>
+
+                                <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} style={{ maxHeight: 360 }}>
+                                    <Text style={styles.inputLabel}>Title</Text>
+                                    <TextInput
+                                        style={styles.input}
+                                        placeholder="e.g. Highlights vs Knights"
+                                        placeholderTextColor={colors.textSecondary}
+                                        value={mediaTitleInput}
+                                        onChangeText={setMediaTitleInput}
+                                        autoCapitalize="sentences"
+                                    />
+
+                                    <Text style={[styles.inputLabel, { marginTop: 12 }]}>Link</Text>
+                                    <TextInput
+                                        style={[styles.input, { marginBottom: 0 }]}
+                                        placeholder="YouTube, image URL, or any https link"
+                                        placeholderTextColor={colors.textSecondary}
+                                        value={mediaUrlInput}
+                                        onChangeText={setMediaUrlInput}
+                                        autoCapitalize="none"
+                                        keyboardType="url"
+                                    />
+                                </ScrollView>
+
+                                <TouchableOpacity
+                                    style={[styles.addPermissionBtn, { opacity: isSavingMedia ? 0.75 : 1, marginTop: 20 }]}
+                                    onPress={handleSaveTeamMedia}
+                                    disabled={isSavingMedia}
+                                    activeOpacity={0.85}
+                                >
+                                    <Text style={styles.addPermissionBtnText}>{isSavingMedia ? 'Saving...' : 'Publish'}</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </KeyboardAvoidingView>
+                    </View>
+                </View>
+            </Modal>
+
             {showCopiedToast && (
                 <View pointerEvents="none" style={{ position: 'absolute', bottom: 20, alignSelf: 'center', backgroundColor: '#16A34A', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 6, zIndex: 999 }}>
                     <Ionicons name="checkmark-circle" size={16} color="#ffffff" />
@@ -1298,7 +1714,7 @@ export default function TeamDashboardScreen() {
                 </View>
             )}
 
-        </KeyboardAvoidingView>
+        </View>
     );
 }
 
@@ -1339,7 +1755,8 @@ const getStyles = (colors: ThemeColors) => {
         },
         previewModeText: { ...Typography.bodySmall, color: colors.primary, fontWeight: '700' },
 
-        mainContent: { flex: 1, paddingHorizontal: Layout.padding, paddingTop: 24 },
+        mainContent: { flex: 1 },
+        mainContentContainer: { paddingHorizontal: Layout.padding, paddingTop: 24, paddingBottom: 60 },
         
         infoCard: { alignItems: 'center', padding: 16, backgroundColor: colors.surface, borderRadius: Layout.radiusLg, marginBottom: 24, borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
         teamBannerWrap: {
@@ -1427,11 +1844,23 @@ const getStyles = (colors: ThemeColors) => {
         codeBadgeLabel: { ...Typography.label, marginBottom: 4 },
         codeBadgeCode: { ...Typography.title, fontSize: 20, color: colors.text, letterSpacing: 2 },
 
-        actionRow: { flexDirection: 'row', marginBottom: 32 },
+        actionRow: { flexDirection: 'row', marginBottom: 32, alignItems: 'stretch', gap: 0 },
         primaryActionBtn: { backgroundColor: colors.primary, paddingVertical: 20, paddingHorizontal: 16, borderRadius: Layout.radiusMd, alignItems: 'center', justifyContent: 'center' },
         primaryActionBtnText: { ...Typography.button, color: colors.onPrimary },
         liveActionBtn: { backgroundColor: colors.error, paddingVertical: 20, paddingHorizontal: 16, borderRadius: Layout.radiusMd, alignItems: 'center', justifyContent: 'center' },
+        secondaryMediaBtn: {
+            width: 112,
+            paddingVertical: 14,
+            paddingHorizontal: 10,
+            borderRadius: Layout.radiusMd,
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderWidth: 2,
+        },
+        secondaryMediaBtnText: { ...Typography.label, fontSize: 11, fontWeight: '900', textAlign: 'center', lineHeight: 14 },
 
+        addMediaInlineBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderRadius: Layout.radiusSm, paddingHorizontal: 9, paddingVertical: 5 },
+        addMediaInlineText: { ...Typography.label, fontSize: 10 },
         mediaHighlightsRow: { flexDirection: 'row', gap: 10, paddingHorizontal: 2 },
         mediaCard: {
             width: 150,
@@ -1442,6 +1871,7 @@ const getStyles = (colors: ThemeColors) => {
             overflow: 'hidden',
             ...Layout.shadow,
         },
+        addMediaCard: { borderStyle: 'dashed' },
         mediaCardImage: { width: '100%', height: 90, backgroundColor: colors.surfaceSecondary },
         mediaCardIconBox: {
             width: '100%',
@@ -1475,52 +1905,84 @@ const getStyles = (colors: ThemeColors) => {
         privatePageText: { ...Typography.bodySmall, color: colors.textSecondary, textAlign: 'center' },
 
         sectionHeader: { marginBottom: 16 },
+        teamMediaSectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
         sectionTitle: { ...Typography.subtitle, fontWeight: '600', color: colors.text },
         rosterHintText: { ...Typography.bodySmall, color: colors.textSecondary, marginTop: 4 },
 
         addPlayerContainer: { backgroundColor: colors.surface, padding: 20, borderRadius: Layout.radiusLg, marginBottom: 24, borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
+        claimRosterHint: {
+            flexDirection: 'row',
+            alignItems: 'flex-start',
+            gap: 8,
+            padding: 10,
+            borderRadius: Layout.radiusSm,
+            backgroundColor: colors.surfaceSecondary,
+            marginBottom: 14,
+        },
+        claimRosterHintText: { ...Typography.bodySmall, color: colors.textSecondary, flex: 1, lineHeight: 18 },
         inputRow: { flexDirection: 'row', marginBottom: 16 },
         input: { ...Typography.body, backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border, padding: 12, borderRadius: Layout.radiusMd, color: colors.text },
         inputNum: { ...Typography.body, backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border, padding: 12, borderRadius: Layout.radiusMd, color: colors.text, textAlign: 'center' },
         addPlayerBtn: { flexDirection: 'row', backgroundColor: 'transparent', padding: 12, borderRadius: Layout.radiusMd, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.primary },
         addPlayerBtnText: { ...Typography.button, color: colors.primary, marginLeft: 8 },
+        pasteRosterBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 10, paddingVertical: 12, borderRadius: Layout.radiusMd, backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border },
+        pasteRosterText: { ...Typography.bodySmall, color: colors.textSecondary, fontWeight: '700' },
 
-        rosterList: { marginBottom: 24 },
-        playerCard: { flexDirection: 'row', backgroundColor: colors.surface, padding: 16, borderRadius: Layout.radiusMd, marginBottom: 12, alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
+        rosterShowcase: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: Layout.radiusLg, marginBottom: 18, overflow: 'hidden', ...Layout.shadow },
+        rosterShowcaseHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.surfaceSecondary, borderBottomWidth: 1, paddingHorizontal: 10, paddingVertical: 10 },
+        rosterShowcaseTitle: { ...Typography.label, color: colors.text, letterSpacing: 1.2 },
+        rosterShowcaseSub: { ...Typography.caption, color: colors.textSecondary, fontWeight: '700' },
+        rosterList: { marginBottom: 18 },
+        playerCard: { flexDirection: 'row', backgroundColor: colors.surface, paddingVertical: 11, paddingLeft: 4, paddingRight: 8, alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderColor: colors.border },
         playerInfo: { flexDirection: 'row', alignItems: 'center' },
-        playerNumberBox: { width: 36, height: 36, borderRadius: Layout.radiusSm, backgroundColor: colors.surfaceSecondary, alignItems: 'center', justifyContent: 'center', marginRight: 16 },
-        playerNumberText: { ...Typography.body, fontWeight: '700', color: colors.textSecondary },
-        playerNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-        playerNameText: { ...Typography.body, fontWeight: '600' },
-        playerMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4, flexWrap: 'wrap' },
+        playerNumberBox: { width: 36, alignItems: 'flex-end', justifyContent: 'center', marginRight: 6 },
+        playerNumberText: { ...Typography.body, fontSize: 22, fontWeight: '900', color: colors.textSecondary, fontVariant: ['tabular-nums'] },
+        playerNameRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, flex: 1, minWidth: 0 },
+        playerTextBlock: { flex: 1, flexDirection: 'column', justifyContent: 'center' },
+        playerAvailCoachCol: { width: 30, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 2 },
+        playerNameText: { ...Typography.body, fontSize: 22, lineHeight: 26, flexShrink: 1, fontWeight: '900', letterSpacing: 0.1 },
+        playerMetaInline: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 5, flexShrink: 1 },
+        playerMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 5, flexShrink: 0 },
+        playerAvailabilityPill: { width: 21, height: 21, borderRadius: 11, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
         playerRolePill: {
             flexDirection: 'row',
             alignItems: 'center',
-            gap: 4,
+            gap: 3,
             borderWidth: 1,
-            borderRadius: Layout.radiusFull,
-            paddingHorizontal: 8,
-            paddingVertical: 2,
+            borderRadius: Layout.radiusSm,
+            paddingHorizontal: 6,
+            paddingVertical: 1,
         },
-        playerRolePillText: { ...Typography.label },
+        playerRolePillText: { ...Typography.label, fontSize: 10, lineHeight: 11 },
         playerBadgePill: {
             flexDirection: 'row',
             alignItems: 'center',
             gap: 4,
             borderWidth: 1,
-            borderRadius: Layout.radiusFull,
-            paddingHorizontal: 8,
-            paddingVertical: 2,
+            borderRadius: Layout.radiusSm,
+            paddingHorizontal: 7,
+            paddingVertical: 3,
         },
-        playerBadgePillText: { ...Typography.label },
-        playerDelBtn: { padding: 8 },
+        playerBadgePillText: { ...Typography.label, fontSize: 10, lineHeight: 13 },
+        playerClaimRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 5 },
+        playerClaimText: { ...Typography.bodySmall, color: colors.textSecondary, fontSize: 11, fontWeight: '600' },
+        playerDelBtn: { padding: 6, marginLeft: 4 },
+        rosterManageFooter: { flexDirection: 'row', gap: 10, padding: 10, backgroundColor: colors.surfaceSecondary, borderTopWidth: 1, borderTopColor: colors.border },
+        rosterManageBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderWidth: 1, borderRadius: Layout.radiusMd, paddingVertical: 11, paddingHorizontal: 8 },
+        rosterManageSecondaryBtn: { backgroundColor: colors.surface },
+        rosterManageBtnText: { ...Typography.button, color: colors.onPrimary, fontSize: 12 },
 
-        historyCard: { flexDirection: 'row', backgroundColor: colors.surface, padding: 16, borderRadius: Layout.radiusMd, marginBottom: 12, alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
+        recentFormCard: { backgroundColor: colors.surface, borderRadius: Layout.radiusLg, overflow: 'hidden', borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
+        recentFormHeader: { backgroundColor: colors.surfaceSecondary, borderBottomWidth: 1, borderBottomColor: colors.border, paddingHorizontal: 12, paddingVertical: 10 },
+        recentFormTitle: { ...Typography.label, color: colors.text, letterSpacing: 1.2 },
+        historyCard: { flexDirection: 'row', backgroundColor: colors.surface, paddingVertical: 12, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.18)' },
         historyMatchInfo: { flex: 1, paddingRight: 10 },
-        historyOpponent: { ...Typography.body, fontWeight: '600', marginBottom: 4 },
-        historyDate: { ...Typography.bodySmall },
-        historyScoreBox: { backgroundColor: colors.surfaceSecondary, paddingVertical: 6, paddingHorizontal: 12, borderRadius: Layout.radiusSm },
-        historyScoreText: { ...Typography.title, fontSize: 18 },
+        historyOpponent: { ...Typography.bodySmall, color: colors.text, fontWeight: '700', marginBottom: 3 },
+        historyDate: { ...Typography.caption },
+        historyResultPill: { width: 30, height: 24, alignItems: 'center', justifyContent: 'center', borderRadius: Layout.radiusSm, marginRight: 8 },
+        historyResultText: { ...Typography.label, fontWeight: '900' },
+        historyScoreBox: { backgroundColor: colors.surfaceSecondary, paddingVertical: 5, paddingHorizontal: 10, borderRadius: Layout.radiusSm },
+        historyScoreText: { ...Typography.title, fontSize: 16 },
 
         deleteTeamBtn: { flexDirection: 'row', backgroundColor: colors.errorBg, padding: 16, borderRadius: Layout.radiusMd, alignItems: 'center', justifyContent: 'center', marginTop: 16, marginBottom: 32 },
         deleteTeamBtnText: { ...Typography.button, color: colors.error, marginLeft: 8 },
@@ -1531,6 +1993,30 @@ const getStyles = (colors: ThemeColors) => {
         filterChipTextActive: { color: colors.onPrimary },
 
         quickStatCard: { flex: 1, backgroundColor: colors.surface, paddingVertical: 12, paddingHorizontal: 12, borderRadius: Layout.radiusMd, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', ...Layout.shadow },
+        statsTape: { flexDirection: 'row', overflow: 'hidden', backgroundColor: colors.surface, borderRadius: Layout.radiusMd, borderWidth: 1, marginBottom: 12, ...Layout.shadow },
+        statsTapeCell: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 10, borderRightWidth: 1, borderRightColor: colors.border },
+        statsTapeLabel: { ...Typography.label, fontSize: 8, textAlign: 'center' },
+        statsTapeValue: { ...Typography.title, fontSize: 17, marginTop: 3 },
+        efficiencyCard: { borderWidth: 1, borderRadius: Layout.radiusLg, padding: 16, marginBottom: 12, overflow: 'hidden', ...Layout.shadow },
+        efficiencyKicker: { ...Typography.label, color: 'rgba(255,255,255,0.78)', marginBottom: 4 },
+        efficiencyExplainer: {
+            ...Typography.caption,
+            color: 'rgba(255,255,255,0.82)',
+            marginBottom: 10,
+            lineHeight: 16,
+            fontSize: 11,
+        },
+        efficiencyScoreRow: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', gap: 10 },
+        efficiencyScore: { fontSize: 48, lineHeight: 52, fontWeight: '900', color: '#fff', letterSpacing: -2 },
+        efficiencyDelta: { ...Typography.bodySmall, color: 'rgba(255,255,255,0.86)', fontWeight: '900' },
+        efficiencyMetaRow: { flexDirection: 'row', gap: 28, marginTop: 12 },
+        efficiencyMetaLabel: { ...Typography.label, color: 'rgba(255,255,255,0.72)', fontSize: 9 },
+        efficiencyMetaValue: { ...Typography.bodySmall, color: '#fff', fontWeight: '900', marginTop: 2 },
+        metricGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
+        metricBox: { flexGrow: 1, flexBasis: '22%', minWidth: 72, backgroundColor: colors.surface, borderWidth: 1, borderRadius: Layout.radiusMd, padding: 10, ...Layout.shadow },
+        metricBoxLabel: { ...Typography.label, fontSize: 9 },
+        metricBoxValue: { ...Typography.title, fontSize: 20, marginTop: 8, lineHeight: 22 },
+        metricBoxRank: { ...Typography.label, color: colors.textSecondary, fontSize: 8, marginTop: 4 },
         statCard: { backgroundColor: colors.surface, paddingVertical: 16, paddingHorizontal: 14, borderRadius: Layout.radiusMd, borderWidth: 1, borderColor: colors.border, alignItems: 'flex-start', justifyContent: 'center', ...Layout.shadow },
         statValue: { ...Typography.title, fontSize: 32, marginBottom: 4 },
         statLabel: { ...Typography.bodySmall, textAlign: 'left', fontSize: 11, lineHeight: 17 },
@@ -1603,7 +2089,7 @@ const getStyles = (colors: ThemeColors) => {
             marginBottom: 8,
         },
         availabilityName: { ...Typography.bodySmall, color: colors.text, fontWeight: '600', flex: 1, paddingRight: 8 },
-        availabilityControls: { flexDirection: 'row', gap: 8 },
+        availabilityControls: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 0 },
         availabilityBtn: {
             width: 32,
             height: 32,
@@ -1621,6 +2107,25 @@ const getStyles = (colors: ThemeColors) => {
         permissionsBtnText: { ...Typography.button, color: colors.primary, marginLeft: 8 },
 
         modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+        addMediaModalRoot: { flex: 1 },
+        addMediaModalBackdrop: {
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            top: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.55)',
+        },
+        addMediaModalSheetAnchor: {
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            top: 0,
+            bottom: 0,
+            justifyContent: 'flex-end',
+            pointerEvents: 'box-none' as const,
+        },
+        addMediaModalKav: { width: '100%' },
         modalContent: { backgroundColor: colors.background, borderTopLeftRadius: Layout.radiusLg, borderTopRightRadius: Layout.radiusLg, padding: Layout.padding, paddingTop: 32, paddingBottom: Platform.OS === 'ios' ? 40 : 24, ...Layout.shadow },
         modalTitle: { ...Typography.title, fontSize: 20 },
         modalSub: { ...Typography.bodySmall },
@@ -1662,6 +2167,55 @@ const getStyles = (colors: ThemeColors) => {
         addPermissionBox: { backgroundColor: colors.surface, padding: 20, borderRadius: Layout.radiusLg, borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
         inputLabel: { ...Typography.label, marginBottom: 8 },
         addPermissionBtn: { backgroundColor: colors.primary, paddingHorizontal: 20, paddingVertical: 14, borderRadius: Layout.radiusMd, alignItems: 'center', justifyContent: 'center' },
-        addPermissionBtnText: { ...Typography.button, color: colors.onPrimary }
+        addPermissionBtnText: { ...Typography.button, color: colors.onPrimary },
+
+        pendingObserverHeader: {
+            borderWidth: 1,
+            borderRadius: Layout.radiusLg,
+            padding: 14,
+            marginBottom: 10,
+            ...Layout.shadow,
+        },
+        pendingObserverTitle: { ...Typography.body, fontWeight: '900', marginBottom: 6 },
+        pendingObserverSubtitle: { ...Typography.bodySmall, lineHeight: 18 },
+        pendingObserverCard: {
+            borderWidth: 1,
+            borderRadius: Layout.radiusLg,
+            padding: 14,
+            marginBottom: 12,
+            ...Layout.shadow,
+        },
+        pendingObserverCardTitle: { ...Typography.body, fontWeight: '800', marginBottom: 4 },
+        pendingObserverActions: {
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            gap: 10,
+            marginTop: 12,
+        },
+        pendingObserverGhostBtn: {
+            borderWidth: 1,
+            paddingVertical: 10,
+            paddingHorizontal: 14,
+            borderRadius: Layout.radiusMd,
+            backgroundColor: colors.surfaceSecondary,
+        },
+        pendingObserverGhostBtnText: { ...Typography.button, fontWeight: '800', fontSize: 13 },
+        pendingObserverPrimaryBtn: {
+            paddingVertical: 10,
+            paddingHorizontal: 16,
+            borderRadius: Layout.radiusMd,
+            minWidth: 88,
+            alignItems: 'center',
+        },
+        pendingObserverPrimaryBtnText: { ...Typography.button, fontWeight: '800', fontSize: 13 },
+        pendingObserverDangerBtn: {
+            borderWidth: 1,
+            paddingVertical: 10,
+            paddingHorizontal: 14,
+            borderRadius: Layout.radiusMd,
+            backgroundColor: colors.surfaceSecondary,
+        },
+        pendingObserverDangerBtnText: { ...Typography.button, fontWeight: '800', fontSize: 13 },
+        pendingObserverFanNote: { ...Typography.bodySmall, marginTop: 10, paddingHorizontal: 4 },
     });
 }

@@ -1,4 +1,8 @@
 // Dynamic Design System
+//
+// "Live" semantic palette
+// -----------------------
+// `live` tuned brighter for unmistakable LIVE status on hub cards (`onLive` text stays WCAG-AA on fills).
 export const LightColors = {
     primary: '#2563EB',
     primaryLight: '#DBEAFE',
@@ -13,6 +17,12 @@ export const LightColors = {
     errorBg: '#FEE2E2',
     success: '#10B981',
     warning: '#F59E0B',
+    // Live semantic palette — vivid “broadcast” red on light surfaces
+    live: '#DC2626',          // red-600
+    liveStrong: '#B91C1C',    // red-700
+    liveSoft: '#FEE2E2',      // red-100
+    onLive: '#FFFFFF',
+    liveBorder: '#F43F5E',    // rose-500 accent edge
 };
 
 export const DarkColors = {
@@ -29,6 +39,12 @@ export const DarkColors = {
     errorBg: '#450a0a',
     success: '#10B981',
     warning: '#F59E0B',
+    // Live semantic palette — punchy reds that still read cleanly on OLED black
+    live: '#EF4444',          // red-500
+    liveStrong: '#DC2626',    // red-600
+    liveSoft: '#3B0A0A',
+    onLive: '#FFFFFF',
+    liveBorder: '#F87171',    // red-400 rim
 };
 
 // Fallback for non-reactive items or transitional state
@@ -39,8 +55,10 @@ export const Typography = {
     subtitle: { fontFamily: 'System', fontSize: 16, fontWeight: '500' as const, color: Colors.textSecondary },
     body: { fontFamily: 'System', fontSize: 16, fontWeight: '400' as const, color: Colors.text },
     bodySmall: { fontFamily: 'System', fontSize: 14, fontWeight: '400' as const, color: Colors.textSecondary },
+    caption: { fontFamily: 'System', fontSize: 12, fontWeight: '400' as const, color: Colors.textSecondary },
     label: { fontFamily: 'System', fontSize: 12, fontWeight: '600' as const, color: Colors.textSecondary, textTransform: 'uppercase' as const, letterSpacing: 0.5 },
     button: { fontFamily: 'System', fontSize: 16, fontWeight: '600' as const },
+    mono: { fontFamily: 'monospace', fontSize: 14, fontWeight: '600' as const, color: Colors.text },
 };
 
 export const getTypography = (c: typeof LightColors) => ({
@@ -48,8 +66,10 @@ export const getTypography = (c: typeof LightColors) => ({
     subtitle: { fontFamily: 'System', fontSize: 16, fontWeight: '500' as const, color: c.textSecondary },
     body: { fontFamily: 'System', fontSize: 16, fontWeight: '400' as const, color: c.text },
     bodySmall: { fontFamily: 'System', fontSize: 14, fontWeight: '400' as const, color: c.textSecondary },
+    caption: { fontFamily: 'System', fontSize: 12, fontWeight: '400' as const, color: c.textSecondary },
     label: { fontFamily: 'System', fontSize: 12, fontWeight: '600' as const, color: c.textSecondary, textTransform: 'uppercase' as const, letterSpacing: 0.5 },
     button: { fontFamily: 'System', fontSize: 16, fontWeight: '600' as const },
+    mono: { fontFamily: 'monospace', fontSize: 14, fontWeight: '600' as const, color: c.text },
 });
 
 export const Layout = {
@@ -66,4 +86,33 @@ export const Layout = {
         shadowRadius: 8,
         elevation: 2,
     }
+};
+
+// 8pt spacing scale — use these instead of one-off margins to keep rhythm tight.
+export const Spacing = {
+    xs: 4,
+    sm: 8,
+    md: 12,
+    lg: 16,
+    xl: 24,
+    xxl: 32,
+    section: 40,
+};
+
+// Motion tokens — single source of truth for press feedback / haptics policy.
+//
+// Press behavior contract (TactilePressable):
+//   pressed:   scale -> Motion.pressScale, opacity -> Motion.pressOpacity
+//   released:  spring back over Motion.pressDurationMs
+//   haptic:    fired ONCE on pressIn, gated by Platform (ios/android only)
+//
+// Heavy/destructive surfaces should request `haptic="heavy"`; primary actions
+// `haptic="medium"`; benign toggles/chips `haptic="selection"`.
+export const Motion = {
+    pressScale: 0.94,
+    pressOpacity: 0.9,
+    pressTranslateY: 2,
+    pressDurationMs: 90,
+    enterDurationMs: 220,
+    exitDurationMs: 160,
 };

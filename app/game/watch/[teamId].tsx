@@ -513,7 +513,7 @@ export default function LiveFeedScreen() {
     }, []);
 
     const handleEmojiPress = useCallback((emoji: string) => {
-        const userId = auth.currentUser?.uid || 'anon';
+        const uid = auth.currentUser?.uid;
         const now = Date.now();
         if (emoji === '🥏') {
             launchFlyingDiscs(4, colors.primary);
@@ -526,8 +526,8 @@ export default function LiveFeedScreen() {
         ].slice(-20));
         
         // Debounce Firebase to prevent lag from spamming
-        if (activeGame?.gameId && now - lastEmojiSentRef.current > 300) {
-            InteractionService.sendReaction(activeGame.gameId, emoji, userId);
+        if (activeGame?.gameId && uid && now - lastEmojiSentRef.current > 300) {
+            InteractionService.sendReaction(activeGame.gameId, emoji, uid);
             lastEmojiSentRef.current = now;
         }
     }, [activeGame?.gameId, colors.primary, launchFlyingDiscs]);
@@ -744,13 +744,15 @@ export default function LiveFeedScreen() {
         if (!throwerId || !receiverId || !(isCompletion || isTurn)) return;
         if (!isValidCoord(event.fromFieldPosition) || !isValidCoord(event.fieldPosition)) return;
 
-        const dx = event.fieldPosition.x - event.fromFieldPosition.x;
-        const dy = event.fieldPosition.y - event.fromFieldPosition.y;
+        const fromCoord = event.fromFieldPosition!;
+        const toCoord = event.fieldPosition!;
+        const dx = toCoord.x - fromCoord.x;
+        const dy = toCoord.y - fromCoord.y;
         const distance = Math.sqrt((dx * dx) + (dy * dy));
-        const profile = classifyThrowProfile(dx, dy, distance, event.fieldPosition.x);
+        const profile = classifyThrowProfile(dx, dy, distance, toCoord.x);
         liveThrowProfiles[profile] = (liveThrowProfiles[profile] || 0) + 1;
 
-        const delta = zoneValueFromX(event.fieldPosition.x) - zoneValueFromX(event.fromFieldPosition.x);
+        const delta = zoneValueFromX(toCoord.x) - zoneValueFromX(fromCoord.x);
         epvPulseTotal += delta;
         epvPulseSamples += 1;
     });
@@ -773,6 +775,14 @@ export default function LiveFeedScreen() {
     const momentumText = runSide
         ? `${runSide === 'US' ? (team?.name || 'Us') : (activeGame?.team2Name || 'Opponent')} on a ${runCount}-point run`
         : 'No scoring run yet';
+
+    const spectatorTeam1Possesses = !!activeGame && activeGame.possession === activeGame.team1Id;
+    const spectatorDiscOwnerName = activeGame
+        ? (spectatorTeam1Possesses ? (team?.name || 'Us') : (activeGame.team2Name || 'Opponent')).trim() || 'Team'
+        : '';
+    const spectatorDiscBorderColor = spectatorTeam1Possesses ? colors.primary : colors.error;
+    const spectatorDiscBgColor = spectatorTeam1Possesses ? colors.primaryLight : colors.errorBg;
+    const spectatorDiscIconColor = spectatorDiscBorderColor;
 
     if (team) {
         return (
@@ -933,30 +943,47 @@ export default function LiveFeedScreen() {
 
                     {activeGame ? (
                         <>
-                            {/* SCOREBOARD */}
+                            {/* SCOREBOARD (matches recorder: scores + center disc) */}
                             <View style={styles.scoreboard}>
-                                <View style={styles.scoreBox}>
+                                <View
+                                    style={[
+                                        styles.scoreBox,
+                                        spectatorTeam1Possesses ? styles.scoreBoxPossessionOur : styles.scoreBoxPossessionDim,
+                                    ]}
+                                >
                                     <Text style={styles.scoreLabel} numberOfLines={1}>
                                         {team.name.toUpperCase()}
                                     </Text>
                                     <Text style={styles.scoreNumber}>{activeGame.score1}</Text>
                                 </View>
-                                <View style={styles.scoreCenter}>
-                                    <Text style={styles.scoreVs}>VS</Text>
+                                <View style={styles.scoreboardDiscColumn}>
+                                    <View
+                                        style={[
+                                            styles.discPill,
+                                            {
+                                                borderColor: spectatorDiscBorderColor,
+                                                backgroundColor: spectatorDiscBgColor,
+                                            },
+                                        ]}
+                                    >
+                                        <Ionicons name="radio-button-on" size={22} color={spectatorDiscIconColor} />
+                                    </View>
+                                    <Text style={styles.discPillCaption} numberOfLines={4}>
+                                        {spectatorDiscOwnerName}
+                                        {'\n'}Disc
+                                    </Text>
                                 </View>
-                                <View style={styles.scoreBox}>
+                                <View
+                                    style={[
+                                        styles.scoreBox,
+                                        !spectatorTeam1Possesses ? styles.scoreBoxPossessionOpp : styles.scoreBoxPossessionDim,
+                                    ]}
+                                >
                                     <Text style={styles.scoreLabel} numberOfLines={1}>
                                         {(activeGame.team2Name || 'OPPONENT').toUpperCase()}
                                     </Text>
                                     <Text style={styles.scoreNumber}>{activeGame.score2}</Text>
                                 </View>
-                            </View>
-
-                            {/* POSSESSION INDICATOR */}
-                            <View style={[styles.possessionBar, { backgroundColor: activeGame.possession === activeGame.team1Id ? colors.primaryLight : colors.errorBg }]}>
-                                <Text style={[styles.possessionText, { color: activeGame.possession === activeGame.team1Id ? colors.primary : colors.error }]}>
-                                    {activeGame.possession === activeGame.team1Id ? `▶ ${team.name} Possession` : `◀ ${activeGame.team2Name || 'Opponent'} Possession`}
-                                </Text>
                             </View>
 
                             <LiveFieldTracker
@@ -1274,11 +1301,11 @@ const getStyles = (colors: ThemeColors) => {
         paddingVertical: 14,
         paddingHorizontal: 18,
         alignItems: 'center',
+        ...Layout.shadow,
         shadowOffset: { width: 0, height: 8 },
         shadowOpacity: 0.24,
         shadowRadius: 18,
         elevation: 10,
-        ...Layout.shadow,
     },
     scoreCelebrationIconWrap: {
         width: 30,
@@ -1293,17 +1320,52 @@ const getStyles = (colors: ThemeColors) => {
     scoreCelebrationTitle: { color: colors.text, fontSize: 22, fontWeight: '800', letterSpacing: 1 },
     scoreCelebrationTeam: { marginTop: 2, fontSize: 14, fontWeight: '700' },
 
-    // Scoreboard - enhanced
-    scoreboard: { flexDirection: 'row', backgroundColor: colors.surface, borderRadius: Layout.radiusLg, paddingVertical: 24, paddingHorizontal: 20, marginBottom: 12, alignItems: 'center', borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
-    scoreBox: { flex: 1, alignItems: 'center' },
+    // Scoreboard (aligned with game recorder layout)
+    scoreboard: {
+        flexDirection: 'row',
+        backgroundColor: colors.surface,
+        borderRadius: Layout.radiusLg,
+        paddingVertical: 18,
+        paddingHorizontal: 8,
+        marginBottom: 16,
+        alignItems: 'stretch',
+        borderWidth: 1,
+        borderColor: colors.border,
+        ...Layout.shadow,
+    },
+    scoreBox: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 6, paddingHorizontal: 4, borderRadius: Layout.radiusMd },
+    scoreBoxPossessionOur: {
+        backgroundColor: colors.primaryLight,
+        borderWidth: 2,
+        borderColor: colors.primary,
+    },
+    scoreBoxPossessionOpp: {
+        backgroundColor: colors.errorBg,
+        borderWidth: 2,
+        borderColor: colors.error,
+    },
+    scoreBoxPossessionDim: { opacity: 0.72 },
+    scoreboardDiscColumn: { width: 120, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+    discPill: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 2,
+    },
+    discPillCaption: {
+        ...getTypography(colors).caption,
+        color: colors.text,
+        fontWeight: '700',
+        textAlign: 'center',
+        marginTop: 6,
+        lineHeight: 15,
+        fontSize: 11,
+        maxWidth: 118,
+    },
     scoreLabel: { ...getTypography(colors).label, marginBottom: 4, fontSize: 10 },
     scoreNumber: { ...getTypography(colors).title, fontSize: 48, lineHeight: 54 },
-    scoreCenter: { paddingHorizontal: 16 },
-    scoreVs: { ...getTypography(colors).label, fontSize: 14, color: colors.textSecondary },
-
-    // Possession
-    possessionBar: { paddingVertical: 10, borderRadius: Layout.radiusMd, marginBottom: 16, alignItems: 'center', borderWidth: 1, borderColor: colors.border },
-    possessionText: { ...getTypography(colors).body, fontWeight: '700', fontSize: 13 },
 
     // Stream
     streamCard: { backgroundColor: colors.surface, borderRadius: Layout.radiusLg, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: colors.border, ...Layout.shadow },

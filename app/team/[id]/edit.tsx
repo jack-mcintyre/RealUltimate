@@ -49,6 +49,7 @@ export default function TeamEditPageScreen() {
     const [mediaType, setMediaType] = useState<MediaType>('image');
 
     const [isSaving, setIsSaving] = useState(false);
+    const [isObserverCodeBusy, setIsObserverCodeBusy] = useState(false);
     const [errorText, setErrorText] = useState('');
     const [showSavedToast, setShowSavedToast] = useState(false);
     const [cropTarget, setCropTarget] = useState<{
@@ -302,6 +303,28 @@ export default function TeamEditPageScreen() {
         }, 2200);
     };
 
+    const handleObserverCodePress = async () => {
+        const uid = auth.currentUser?.uid;
+        if (!team || !uid || isObserverCodeBusy) return;
+
+        const existing = joinCodes?.observer;
+        if (existing) {
+            await copyToClipboard(existing);
+            return;
+        }
+
+        try {
+            setIsObserverCodeBusy(true);
+            setErrorText('');
+            const code = await TeamService.ensureObserverCode(team.id, uid);
+            await copyToClipboard(code);
+        } catch {
+            setErrorText('Could not create observer code. Check that Firebase rules are deployed and you have team manager access.');
+        } finally {
+            setIsObserverCodeBusy(false);
+        }
+    };
+
     const handlePreviewPublic = () => {
         if (!team) return;
         router.push({ pathname: '/team/[id]', params: { id: team.id, preview: 'public' } } as any);
@@ -432,7 +455,8 @@ export default function TeamEditPageScreen() {
 
                 <View style={styles.card}>
                     <Text style={styles.cardTitle}>Access Codes</Text>
-                    <View style={{ flexDirection: 'row', gap: 12 }}>
+                    <Text style={styles.mutedText}>Observer code is for neutral scorers only. It does not grant coach or roster access.</Text>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 12 }}>
                         <TouchableOpacity style={{ flex: 1, backgroundColor: colors.surfaceSecondary, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: colors.border, alignItems: 'center' }} onPress={() => { const code = joinCodes?.coach || team?.accessCode; if (code) copyToClipboard(code); }} activeOpacity={0.7}>
                             <Text style={{ fontSize: 11, color: colors.textSecondary, marginBottom: 4, fontWeight: '700' }}>COACH CODE</Text>
                             <Text style={{ fontSize: 18, fontWeight: '800', letterSpacing: 2, color: colors.primary }}>{joinCodes?.coach || team?.accessCode || 'N/A'}</Text>
@@ -442,6 +466,11 @@ export default function TeamEditPageScreen() {
                             <Text style={{ fontSize: 11, color: colors.textSecondary, marginBottom: 4, fontWeight: '700' }}>FAN CODE</Text>
                             <Text style={{ fontSize: 18, fontWeight: '800', letterSpacing: 2, color: colors.primary }}>{joinCodes?.spectator || team?.spectatorCode || 'N/A'}</Text>
                             <Text style={{ fontSize: 10, color: colors.primary, marginTop: 4 }}>Tap to copy</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={{ flex: 1, minWidth: 150, backgroundColor: colors.surfaceSecondary, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: colors.border, alignItems: 'center' }} onPress={handleObserverCodePress} activeOpacity={0.7} disabled={isObserverCodeBusy}>
+                            <Text style={{ fontSize: 11, color: colors.textSecondary, marginBottom: 4, fontWeight: '700' }}>OBSERVER CODE</Text>
+                            <Text style={{ fontSize: 18, fontWeight: '800', letterSpacing: 2, color: colors.primary }}>{joinCodes?.observer || (isObserverCodeBusy ? '...' : 'CREATE')}</Text>
+                            <Text style={{ fontSize: 10, color: colors.primary, marginTop: 4 }}>{joinCodes?.observer ? 'Tap to copy' : 'Tap to create'}</Text>
                         </TouchableOpacity>
                     </View>
                 </View>

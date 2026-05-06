@@ -18,8 +18,52 @@ export const GameLogic = {
                 passCompletions: 0,
                 passTurnovers: 0,
                 receptions: 0,
+                pointsPlayed: 0,
+                oPointsPlayed: 0,
+                dPointsPlayed: 0,
+                pointDiff: 0,
             };
         }
+    },
+
+    updateLineupForPointResult: (state: GameState, event: GameEvent, scoredByTeamId: string) => {
+        const lineupLimit = state.gameFormat === '5v5' ? 5 : 7;
+        const lineupPlayerIds = (event.lineupPlayerIds || state.currentLineupPlayerIds || [])
+            .filter(Boolean)
+            .slice(0, lineupLimit);
+        if (!lineupPlayerIds.length) return;
+
+        const lineType = event.lineType || (event.teamId === state.team1Id ? 'O' : 'D');
+        const pointNumber = event.pointNumber || state.currentPointNumber || 1;
+        const scoredByUs = scoredByTeamId === state.team1Id;
+        const pointDiffDelta = scoredByUs ? 1 : -1;
+
+        lineupPlayerIds.forEach((playerId) => {
+            GameLogic.initPlayerStats(state, playerId);
+            const playerStats = state.playerStats[playerId];
+            Object.assign(playerStats, {
+                pointsPlayed: (playerStats.pointsPlayed || 0) + 1,
+                oPointsPlayed: (playerStats.oPointsPlayed || 0) + (lineType === 'O' ? 1 : 0),
+                dPointsPlayed: (playerStats.dPointsPlayed || 0) + (lineType === 'D' ? 1 : 0),
+                pointDiff: (playerStats.pointDiff || 0) + pointDiffDelta,
+            });
+        });
+
+        if (!state.pointLineups) state.pointLineups = {};
+        state.pointLineups[String(pointNumber)] = {
+            pointNumber,
+            lineType,
+            playerIds: lineupPlayerIds,
+            startedAt: state.pointLineups[String(pointNumber)]?.startedAt || event.timestamp,
+            completedAt: event.timestamp,
+            scoredByTeamId,
+            scoreAfter: {
+                team1: state.score1,
+                team2: state.score2,
+            },
+        };
+        state.currentPointNumber = pointNumber + 1;
+        state.currentLineupPlayerIds = lineupPlayerIds;
     },
 
     applyEvent: (currentState: GameState, event: GameEvent): GameState => {
@@ -32,6 +76,10 @@ export const GameLogic = {
 
         // Ensure players have stat objects initialized
         if (event.playerId) GameLogic.initPlayerStats(newState, event.playerId);
+        if (event.lineupPlayerIds?.length) {
+            const lineupLimit = newState.gameFormat === '5v5' ? 5 : 7;
+            newState.currentLineupPlayerIds = event.lineupPlayerIds.filter(Boolean).slice(0, lineupLimit);
+        }
 
         switch (event.type) {
             case 'Goal':
@@ -68,6 +116,7 @@ export const GameLogic = {
                 }
 
                 // Possession flips for pull
+                GameLogic.updateLineupForPointResult(newState, event, newState.possession);
                 newState.possession = newState.possession === newState.team1Id ? newState.team2Id : newState.team1Id;
                 break;
 
@@ -78,8 +127,15 @@ export const GameLogic = {
                 } else {
                     newState.score2 += 1; // Them scoring
                 }
+                if (event.playerId) {
+                    Object.assign(newState.playerStats[event.playerId], {
+                        goals: newState.playerStats[event.playerId].goals + 1,
+                        timeWithDisc: newState.playerStats[event.playerId].timeWithDisc + (event.timeElapsedMs || 0),
+                    });
+                }
                 
                 // Possession flips for pull
+                GameLogic.updateLineupForPointResult(newState, event, newState.possession);
                 newState.possession = newState.possession === newState.team1Id ? newState.team2Id : newState.team1Id;
                 break;
 
@@ -113,6 +169,12 @@ export const GameLogic = {
 
             case 'Opponent Turnover':
                 // Opponent made a mistake, possession flips to us
+                if (event.playerId) {
+                    Object.assign(newState.playerStats[event.playerId], {
+                        turns: newState.playerStats[event.playerId].turns + 1,
+                        timeWithDisc: newState.playerStats[event.playerId].timeWithDisc + (event.timeElapsedMs || 0),
+                    });
+                }
                 newState.possession = newState.possession === newState.team1Id ? newState.team2Id : newState.team1Id;
                 break;
 
@@ -134,6 +196,7 @@ export const GameLogic = {
                 }
                 newState.score1 += 1;
                 // US scores, so US pulls to THEM
+                GameLogic.updateLineupForPointResult(newState, event, newState.team1Id);
                 newState.possession = newState.team2Id;
                 break;
 
@@ -143,6 +206,7 @@ export const GameLogic = {
                 }
                 newState.score2 += 1;
                 // THEM scores, so THEM pulls to US
+                GameLogic.updateLineupForPointResult(newState, event, newState.team2Id);
                 newState.possession = newState.team1Id;
                 break;
 
@@ -189,6 +253,19 @@ export const GameLogic = {
                 break;
 
             case 'Timeout':
+                if (newState.activeTimeoutStartedAt) {
+                    newState.activeTimeoutStartedAt = undefined;
+                } else {
+                    newState.activeTimeoutStartedAt = event.timestamp;
+                    newState.timeoutDurationSec = event.timeoutDurationSec || newState.timeoutDurationSec || 70;
+                }
+                break;
+
+            case 'Blue Card':
+            case 'Yellow Card':
+            case 'Red Card':
+                // Misconduct cards are accountability events. They stay in history
+                // but do not change score or possession.
                 break;
         }
 

@@ -1,12 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import { router } from 'expo-router';
 import { signOut, updatePassword, updateProfile } from 'firebase/auth';
 import { onValue, ref, update } from 'firebase/database';
 import React, { useEffect, useState } from 'react';
 import { Alert, Image, Linking, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { auth, db } from '../../firebaseConfig';
 import ImageCropperModal from '../../src/components/ImageCropperModal';
+import { AccountService } from '../services/AccountService';
 import { ensureHttps, isHttpUrl, isVerifiedSocialLink, validateSocialExternalUrl } from '../services/linkUtils';
+import { NotificationService } from '../services/NotificationService';
 import { TeamService } from '../services/TeamService';
 import { SocialLinks, Team, UserPublicProfile } from '../services/types';
 import { getTypography, Layout } from '../theme/DesignSystem';
@@ -26,6 +29,8 @@ export default function ProfileScreen() {
     
     const [accountModalVisible, setAccountModalVisible] = useState(false);
     const [newPassword, setNewPassword] = useState('');
+    const [deleteConfirmText, setDeleteConfirmText] = useState('');
+    const [isDeletingAccount, setIsDeletingAccount] = useState(false);
     const [profileModalVisible, setProfileModalVisible] = useState(false);
     const [displayName, setDisplayName] = useState('');
     const [profileAvatarUrl, setProfileAvatarUrl] = useState('');
@@ -55,7 +60,9 @@ export default function ProfileScreen() {
             if (data) {
                 setActiveTeamId(data.activeTeamId);
                 setActiveRole(data.activeRole);
-                if (data.pushSetting) setPushSetting(data.pushSetting);
+                if (data.notificationPreferences?.pushSetting || data.pushSetting) {
+                    setPushSetting(data.notificationPreferences?.pushSetting || data.pushSetting);
+                }
                 const nextPublic: UserPublicProfile = data.publicProfile || {};
                 setPublicProfile(nextPublic);
                 setProfileAvatarUrl(nextPublic.avatarUrl || '');
@@ -102,7 +109,13 @@ export default function ProfileScreen() {
 
     const handleSetPushSetting = async (val: 'all' | 'game' | 'off') => {
         if (!user) return;
-        await update(ref(db, `users/${user.uid}/profile`), { pushSetting: val });
+        await NotificationService.updatePreferences(user.uid, {
+            pushSetting: val,
+            liveActivitiesEnabled: val !== 'off',
+            milestoneAlertsEnabled: val !== 'off',
+            comebackAlertsEnabled: val !== 'off',
+            tournamentAlertsEnabled: val !== 'off',
+        });
         setPushSetting(val);
         setPushModalVisible(false);
     };
@@ -116,6 +129,26 @@ export default function ProfileScreen() {
             setAccountModalVisible(false);
         } catch {
             Alert.alert("Update Failed", "For security, modifying credentials requires a recent login. Please log out and back in to change your password.");
+        }
+    };
+
+    const handleDeleteAccount = async () => {
+        if (!user || deleteConfirmText.trim().toUpperCase() !== 'DELETE') return;
+        try {
+            setIsDeletingAccount(true);
+            await AccountService.requestAndDeleteAccount(user);
+            setAccountModalVisible(false);
+            router.replace('/');
+        } catch (error: any) {
+            const requiresRecentLogin = error?.code === 'auth/requires-recent-login';
+            Alert.alert(
+                'Delete Account Failed',
+                requiresRecentLogin
+                    ? 'For security, deleting your account requires a recent login. Log out, sign back in, then try again. Your deletion request was saved.'
+                    : error?.message || 'Could not delete your account. Please contact support@realultimate.app.'
+            );
+        } finally {
+            setIsDeletingAccount(false);
         }
     };
 
@@ -372,6 +405,20 @@ export default function ProfileScreen() {
                     </TouchableOpacity>
                 </View>
 
+                <Text style={styles.sectionTitle}>LEGAL</Text>
+                <View style={styles.optionsContainer}>
+                    <TouchableOpacity style={styles.optionRow} activeOpacity={0.7} onPress={() => router.push('/legal/privacy' as any)}>
+                        <Ionicons name="document-lock-outline" size={24} color={colors.textSecondary} />
+                        <Text style={styles.optionTextBaseline}>Privacy Policy</Text>
+                        <Ionicons name="chevron-forward" size={20} color={colors.border} />
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.optionRow, { borderBottomWidth: 0 }]} activeOpacity={0.7} onPress={() => router.push('/legal/terms' as any)}>
+                        <Ionicons name="document-text-outline" size={24} color={colors.textSecondary} />
+                        <Text style={styles.optionTextBaseline}>Terms of Service</Text>
+                        <Ionicons name="chevron-forward" size={20} color={colors.border} />
+                    </TouchableOpacity>
+                </View>
+
                 <TouchableOpacity style={styles.logoutButton} onPress={handleLogout} activeOpacity={0.8}>
                     <Text style={styles.logoutText}>Log Out</Text>
                 </TouchableOpacity>
@@ -441,6 +488,27 @@ export default function ProfileScreen() {
                             </TouchableOpacity>
                             <TouchableOpacity style={[styles.modalActionBtn, styles.modalActionBtnPrimary]} onPress={handleUpdatePassword}>
                                 <Text style={[styles.modalActionBtnText, { color: '#fff' }]}>Update Password</Text>
+                            </TouchableOpacity>
+                        </View>
+
+                        <View style={styles.dangerZone}>
+                            <Text style={styles.dangerTitle}>Delete Account</Text>
+                            <Text style={styles.dangerCopy}>This disables notifications, anonymizes your profile, and attempts to remove your Firebase Auth account. Shared game and tournament records may remain for other teams.</Text>
+                            <TextInput
+                                style={styles.inputField}
+                                placeholder="Type DELETE to confirm"
+                                placeholderTextColor={colors.textSecondary}
+                                value={deleteConfirmText}
+                                onChangeText={setDeleteConfirmText}
+                                autoCapitalize="characters"
+                            />
+                            <TouchableOpacity
+                                style={[styles.deleteAccountBtn, (deleteConfirmText.trim().toUpperCase() !== 'DELETE' || isDeletingAccount) && { opacity: 0.5 }]}
+                                onPress={handleDeleteAccount}
+                                disabled={deleteConfirmText.trim().toUpperCase() !== 'DELETE' || isDeletingAccount}
+                                activeOpacity={0.8}
+                            >
+                                <Text style={styles.deleteAccountText}>{isDeletingAccount ? 'Deleting...' : 'Delete My Account'}</Text>
                             </TouchableOpacity>
                         </View>
                     </View>
@@ -721,6 +789,17 @@ const getStyles = (colors: ThemeColors) => {
         inputGroup: { width: '100%', marginBottom: 16 },
         inputLabel: { ...Typography.label, marginBottom: 8 },
         inputField: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, borderRadius: Layout.radiusMd, padding: 12, fontSize: 16, color: colors.text },
+        dangerZone: {
+            width: '100%',
+            marginTop: 18,
+            paddingTop: 16,
+            borderTopWidth: 1,
+            borderTopColor: colors.border,
+        },
+        dangerTitle: { ...Typography.label, color: colors.error, marginBottom: 6 },
+        dangerCopy: { ...Typography.bodySmall, color: colors.textSecondary, marginBottom: 12, lineHeight: 18 },
+        deleteAccountBtn: { backgroundColor: colors.errorBg, borderWidth: 1, borderColor: colors.error, borderRadius: Layout.radiusMd, alignItems: 'center', paddingVertical: 12, marginTop: 10 },
+        deleteAccountText: { ...Typography.button, color: colors.error },
         imagePickerRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
         imagePickBtn: {
             flex: 1,

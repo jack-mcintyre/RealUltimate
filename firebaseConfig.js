@@ -1,24 +1,48 @@
 import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 import { initializeApp } from "firebase/app";
 import { getAuth, getReactNativePersistence, initializeAuth } from 'firebase/auth';
 import { getDatabase } from "firebase/database";
 import { getStorage } from "firebase/storage";
 import { Platform } from 'react-native';
 
-// Your web app's Firebase configuration
-// For Firebase JS SDK v7.20.0 and later, measurementId is optional
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const DEFAULT_FIREBASE = require('./firebase.defaults.js');
+
+/** Resolve `extra.firebase` — SDK / Metro sometimes expose config under manifest instead of expoConfig. */
+function readFirebaseExtra() {
+  const candidates = [
+    Constants.expoConfig?.extra?.firebase,
+    Constants.manifest?.extra?.firebase,
+    Constants.manifest2?.extra?.expoClient?.extra?.firebase,
+  ];
+  for (const patch of candidates) {
+    if (patch?.apiKey && patch?.databaseURL && patch?.projectId) {
+      return patch;
+    }
+  }
+  return null;
+}
+
+const fromExtra = readFirebaseExtra();
+
 const firebaseConfig = {
-  apiKey: "AIzaSyDkyAIfXXMRpsGbZ0idU7Out6N7rZI_93E",
-  authDomain: "realultimate-62638.firebaseapp.com",
-  databaseURL: "https://realultimate-62638-default-rtdb.firebaseio.com",
-  projectId: "realultimate-62638",
-  storageBucket: "realultimate-62638.firebasestorage.app",
-  messagingSenderId: "926825574682",
-  appId: "1:926825574682:web:cb000661a4bb055d35bca3",
-  measurementId: "G-ZM7R0J2CWZ"
+  apiKey: fromExtra?.apiKey || DEFAULT_FIREBASE.apiKey,
+  authDomain: fromExtra?.authDomain || DEFAULT_FIREBASE.authDomain,
+  databaseURL: fromExtra?.databaseURL || DEFAULT_FIREBASE.databaseURL,
+  projectId: fromExtra?.projectId || DEFAULT_FIREBASE.projectId,
+  storageBucket: fromExtra?.storageBucket || DEFAULT_FIREBASE.storageBucket,
+  messagingSenderId: fromExtra?.messagingSenderId || DEFAULT_FIREBASE.messagingSenderId,
+  appId: fromExtra?.appId || DEFAULT_FIREBASE.appId,
+  measurementId: fromExtra?.measurementId ?? DEFAULT_FIREBASE.measurementId,
 };
 
-// Initialize Firebase
+if (!firebaseConfig.apiKey || !firebaseConfig.databaseURL || !firebaseConfig.projectId) {
+  throw new Error(
+    'Firebase client config is incomplete. Set values in firebase.defaults.js or EXPO_PUBLIC_FIREBASE_* environment variables.'
+  );
+}
+
 const app = initializeApp(firebaseConfig);
 
 const auth = Platform.OS === 'web'

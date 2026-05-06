@@ -7,10 +7,11 @@ export const InteractionService = {
     // Store under games/ path which already has write permissions
     sendReaction: async (gameId: string, emoji: string, userId: string) => {
         try {
+            const safeEmoji = (emoji || '').slice(0, 32);
             const reactionRef = push(ref(db, `games/${gameId}/reactions`));
             const reaction: SpectatorReaction = {
                 id: reactionRef.key || Date.now().toString(),
-                emoji,
+                emoji: safeEmoji,
                 userId,
                 timestamp: Date.now(),
             };

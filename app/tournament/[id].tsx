@@ -75,6 +75,7 @@ export default function TournamentDetailScreen() {
     const [editingMatchField, setEditingMatchField] = useState('');
     const [editingMatchDay, setEditingMatchDay] = useState('');
     const [editingMatchStatus, setEditingMatchStatus] = useState<TournamentMatchStatus>('upcoming');
+    const [roomMessageDraft, setRoomMessageDraft] = useState('');
     const [dayFilter, setDayFilter] = useState<number | null>(null);
     const [holdReason, setHoldReason] = useState('');
 
@@ -112,6 +113,32 @@ export default function TournamentDetailScreen() {
         return tournament?.participants?.[participantId]?.name || 'TBD';
     };
 
+    const startTournamentRecording = (match: TournamentMatch, slot: 'A' | 'B') => {
+        if (!tournament) return;
+        const participantId = slot === 'A' ? match.teamAId : match.teamBId;
+        const opponentId = slot === 'A' ? match.teamBId : match.teamAId;
+        const participant = tournament.participants?.[participantId];
+        const opponent = tournament.participants?.[opponentId];
+
+        if (!participant?.linkedTeamId) {
+            Alert.alert('Team link required', 'This participant needs to be linked to a RealUltimate team before coaches can start a linked recording.');
+            return;
+        }
+
+        router.push({
+            pathname: '/game/record/[teamId]',
+            params: {
+                teamId: participant.linkedTeamId,
+                prefOpponentName: opponent?.name || 'Opponent',
+                prefOpponentTeamId: opponent?.linkedTeamId || '',
+                tournamentId: tournament.id,
+                tournamentMatchId: match.id,
+                tournamentParticipantId: participantId,
+                tournamentSlot: slot,
+            },
+        });
+    };
+
     const participantSeed = (participantId: string): number | undefined => {
         if (!participantId || participantId === 'BYE') return undefined;
         return tournament?.participants?.[participantId]?.seed;
@@ -134,7 +161,18 @@ export default function TournamentDetailScreen() {
         setEditingMatchField(match?.fieldName || '');
         setEditingMatchDay(match?.day ? String(match.day) : '');
         setEditingMatchStatus(match?.matchStatus || 'upcoming');
+        setRoomMessageDraft('');
         setMatchEditorOpen(true);
+    };
+
+    const sendMatchRoomMessage = async () => {
+        if (!tournament || !editingMatchId || !auth.currentUser?.uid || !roomMessageDraft.trim()) return;
+        try {
+            await TournamentService.appendMatchRoomMessage(tournament.id, editingMatchId, auth.currentUser.uid, roomMessageDraft);
+            setRoomMessageDraft('');
+        } catch (error: any) {
+            Alert.alert('Message Failed', error?.message || 'Could not send match room message.');
+        }
     };
 
     const openEditParticipant = (t: any) => {
@@ -197,7 +235,7 @@ export default function TournamentDetailScreen() {
 
         const allNumeric = Object.values(payload).every((value) => Number.isFinite(value));
         if (!allNumeric) {
-            Alert.alert('Invalid values', 'All spirit categories must be numeric (0-5).');
+            Alert.alert('Invalid values', 'All spirit categories must be numeric (0-4).');
             return;
         }
 
@@ -238,6 +276,20 @@ export default function TournamentDetailScreen() {
         if (!tournament?.participants) return [];
         return Object.values(tournament.participants).filter(p => p.id !== 'BYE');
     }, [tournament]);
+
+    const visibleTabs = useMemo(() => {
+        if (!tournament) return TABS;
+        return TABS.filter((tab) => {
+            if (tab.key === 'bracket' && tournament.publicBracketEnabled === false && !isCreator) return false;
+            return true;
+        });
+    }, [isCreator, tournament]);
+
+    useEffect(() => {
+        if (!visibleTabs.some((tab) => tab.key === activeTab)) {
+            setActiveTab('overview');
+        }
+    }, [activeTab, visibleTabs]);
 
     if (!tournamentId) {
         return (
@@ -287,6 +339,24 @@ export default function TournamentDetailScreen() {
                     <Text style={[styles.infoValue, { marginTop: 4, lineHeight: 20 }]}>{tournament.bio}</Text>
                 </View>
             ) : null}
+
+            {(tournament.venueName || tournament.venueAddress || tournament.parkingInfo || tournament.medicalInfo || tournament.weatherPolicy || tournament.scheduleNotes || tournament.sponsorLine || tournament.publicContactEmail) && (
+                <View style={styles.logisticsCard}>
+                    <View style={styles.logisticsHeader}>
+                        <Ionicons name="map-outline" size={20} color={colors.primary} />
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.logisticsTitle}>{tournament.venueName || 'Tournament Logistics'}</Text>
+                            {!!tournament.sponsorLine && <Text style={styles.logisticsSub}>{tournament.sponsorLine}</Text>}
+                        </View>
+                    </View>
+                    {!!tournament.venueAddress && <Text style={styles.logisticsLine}>Address: {tournament.venueAddress}</Text>}
+                    {!!tournament.parkingInfo && <Text style={styles.logisticsLine}>Parking/check-in: {tournament.parkingInfo}</Text>}
+                    {!!tournament.medicalInfo && <Text style={styles.logisticsLine}>Medical/safety: {tournament.medicalInfo}</Text>}
+                    {!!tournament.weatherPolicy && <Text style={styles.logisticsLine}>Weather policy: {tournament.weatherPolicy}</Text>}
+                    {!!tournament.scheduleNotes && <Text style={styles.logisticsLine}>Schedule notes: {tournament.scheduleNotes}</Text>}
+                    {!!tournament.publicContactEmail && <Text style={styles.logisticsLine}>Contact: {tournament.publicContactEmail}</Text>}
+                </View>
+            )}
 
             {/* Schedule Hold Banner */}
             {tournament.scheduleHold?.active && (
@@ -454,6 +524,7 @@ export default function TournamentDetailScreen() {
                 <View style={styles.listCard}>
                     {poolMatches.filter(m => dayFilter === null || m.day === dayFilter).map(m => {
                         const statusColor = m.matchStatus === 'in_progress' ? '#34C759' : m.matchStatus === 'final' ? colors.textSecondary : m.matchStatus === 'cancelled' ? '#FF3B30' : colors.border;
+                        const showAssignmentMeta = isCreator || tournament.fieldAssignmentPublic !== false;
                         return (
                         <View key={m.id} style={styles.poolMatchRow}>
                             <View style={styles.poolMatchMeta}>
@@ -461,15 +532,34 @@ export default function TournamentDetailScreen() {
                                     <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: statusColor }} />
                                     <Text style={styles.poolMatchMetaText}>R{m.round}{m.group ? ` · Pool ${m.group}` : ''}</Text>
                                 </View>
-                                {m.fieldName && (
-                                    <View style={{ backgroundColor: colors.primary, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2, marginTop: 4, alignSelf: 'flex-start' }}>
-                                        <Text style={{ color: '#FFF', fontSize: 9, fontWeight: '700' }}>{m.fieldName}</Text>
+                                {((showAssignmentMeta && (m.fieldName || m.day || m.scheduledTime)) || m.verificationStatus) && (
+                                    <View style={styles.matchMetaChipWrap}>
+                                        {showAssignmentMeta && m.day && (
+                                            <View style={styles.matchMetaChip}>
+                                                <Ionicons name="calendar-outline" size={10} color={colors.textSecondary} />
+                                                <Text style={styles.matchMetaChipText}>D{m.day}</Text>
+                                            </View>
+                                        )}
+                                        {showAssignmentMeta && m.fieldName && (
+                                            <View style={[styles.matchMetaChip, { borderColor: colors.primary }]}>
+                                                <Ionicons name="location-outline" size={10} color={colors.primary} />
+                                                <Text style={[styles.matchMetaChipText, { color: colors.primary }]} numberOfLines={1}>{m.fieldName}</Text>
+                                            </View>
+                                        )}
+                                        {showAssignmentMeta && m.scheduledTime && (
+                                            <View style={styles.matchMetaChip}>
+                                                <Ionicons name="time-outline" size={10} color={colors.textSecondary} />
+                                                <Text style={styles.matchMetaChipText}>{m.scheduledTime}</Text>
+                                            </View>
+                                        )}
+                                        {m.verificationStatus === 'challenged' && (
+                                            <View style={[styles.matchMetaChip, { borderColor: colors.warning }]}>
+                                                <Ionicons name="warning-outline" size={10} color={colors.warning} />
+                                                <Text style={[styles.matchMetaChipText, { color: colors.warning }]}>Review</Text>
+                                            </View>
+                                        )}
                                     </View>
                                 )}
-                                {m.scheduledTime && (
-                                    <Text style={[styles.poolMatchMetaText, { color: colors.primary, marginTop: 2, fontSize: 10 }]}>{m.scheduledTime}</Text>
-                                )}
-                                {m.day && <Text style={[styles.poolMatchMetaText, { fontSize: 9, color: colors.textSecondary }]}>Day {m.day}</Text>}
                             </View>
                             <View style={[styles.poolMatchTeams, { justifyContent: 'center' }]}>
                                 <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
@@ -504,9 +594,21 @@ export default function TournamentDetailScreen() {
                                     )}
                                 </View>
                             </View>
-                            <TouchableOpacity style={styles.editBtn} onPress={() => openMatchEditor(m.id)}>
-                                <Text style={styles.editBtnText}>Edit</Text>
-                            </TouchableOpacity>
+                            <View style={styles.matchActionStack}>
+                                {tournament.teamSelfServeEnabled && (
+                                    <View style={{ flexDirection: 'row', gap: 6 }}>
+                                        <TouchableOpacity style={styles.startGameMiniBtn} onPress={() => startTournamentRecording(m, 'A')}>
+                                            <Text style={styles.startGameMiniText}>A Rec</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity style={styles.startGameMiniBtn} onPress={() => startTournamentRecording(m, 'B')}>
+                                            <Text style={styles.startGameMiniText}>B Rec</Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                )}
+                                <TouchableOpacity style={styles.editBtn} onPress={() => openMatchEditor(m.id)}>
+                                    <Text style={styles.editBtnText}>{m.verificationStatus === 'challenged' ? 'Review' : 'Edit'}</Text>
+                                </TouchableOpacity>
+                            </View>
                         </View>
                     )})}
                 </View>
@@ -821,7 +923,7 @@ export default function TournamentDetailScreen() {
 
             {/* Tab Bar */}
             <View style={styles.tabBar}>
-                {TABS.map(tab => (
+                {visibleTabs.map(tab => (
                     <TouchableOpacity 
                         key={tab.key} 
                         style={[styles.tabItem, activeTab === tab.key && styles.tabItemActive]}
@@ -955,6 +1057,41 @@ export default function TournamentDetailScreen() {
                                     </View>
                                 </View>
                             </>
+                        )}
+
+                        {tournament?.coachChatEnabled && (
+                            <View style={styles.matchRoomBox}>
+                                <Text style={styles.matchRoomTitle}>Coach Match Room</Text>
+                                <Text style={styles.matchRoomHint}>
+                                    Use this room for field issues, stream links, score questions, and TD-visible notes when enabled.
+                                </Text>
+                                <View style={styles.matchRoomMessages}>
+                                    {Object.values(tournament.roomMessages?.[editingMatchId] || {})
+                                        .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+                                        .slice(0, 4)
+                                        .map((message) => (
+                                            <View key={message.id} style={styles.matchRoomMessage}>
+                                                <Text style={styles.matchRoomMessageText}>{message.message}</Text>
+                                                <Text style={styles.matchRoomMessageMeta}>{new Date(message.createdAt).toLocaleString()}</Text>
+                                            </View>
+                                        ))}
+                                    {Object.keys(tournament.roomMessages?.[editingMatchId] || {}).length === 0 && (
+                                        <Text style={styles.matchRoomEmpty}>No match room messages yet.</Text>
+                                    )}
+                                </View>
+                                <View style={{ flexDirection: 'row', gap: 8 }}>
+                                    <TextInput
+                                        style={[styles.modalInput, { flex: 1 }]}
+                                        placeholder="Message coaches or TD..."
+                                        placeholderTextColor={colors.textSecondary}
+                                        value={roomMessageDraft}
+                                        onChangeText={setRoomMessageDraft}
+                                    />
+                                    <TouchableOpacity style={styles.sendRoomBtn} onPress={sendMatchRoomMessage} activeOpacity={0.8}>
+                                        <Ionicons name="send" size={16} color={colors.onPrimary} />
+                                    </TouchableOpacity>
+                                </View>
+                            </View>
                         )}
 
                         <View style={styles.modalFooter}>
@@ -1361,6 +1498,19 @@ const getStyles = (colors: ThemeColors) => {
             ...Typography.body,
             fontWeight: '600',
         },
+        logisticsCard: {
+            backgroundColor: colors.surface,
+            borderRadius: Layout.radiusLg,
+            padding: 16,
+            borderWidth: 1,
+            borderColor: colors.primary,
+            gap: 8,
+            ...Layout.shadow,
+        },
+        logisticsHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 },
+        logisticsTitle: { ...Typography.subtitle, fontWeight: '800', color: colors.text },
+        logisticsSub: { ...Typography.bodySmall, color: colors.primary, fontWeight: '700', marginTop: 2 },
+        logisticsLine: { ...Typography.bodySmall, color: colors.textSecondary, lineHeight: 19 },
         tableCard: {
             backgroundColor: colors.surface,
             borderRadius: Layout.radiusLg,
@@ -1448,12 +1598,36 @@ const getStyles = (colors: ThemeColors) => {
             borderBottomColor: colors.border,
         },
         poolMatchMeta: {
-            width: 60,
+            width: 92,
         },
         poolMatchMetaText: {
             ...Typography.caption,
             color: colors.textSecondary,
             textTransform: 'uppercase',
+        },
+        matchMetaChipWrap: {
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            gap: 4,
+            marginTop: 5,
+        },
+        matchMetaChip: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 3,
+            borderWidth: 1,
+            borderColor: colors.border,
+            borderRadius: 999,
+            paddingHorizontal: 6,
+            paddingVertical: 2,
+            backgroundColor: colors.surfaceSecondary,
+            maxWidth: 88,
+        },
+        matchMetaChipText: {
+            ...Typography.caption,
+            color: colors.textSecondary,
+            fontSize: 9,
+            fontWeight: '700',
         },
         poolMatchTeams: {
             flex: 1,
@@ -1476,6 +1650,23 @@ const getStyles = (colors: ThemeColors) => {
             height: 24,
             backgroundColor: colors.border,
             marginHorizontal: 4,
+        },
+        matchActionStack: {
+            gap: 6,
+            alignItems: 'flex-end',
+        },
+        startGameMiniBtn: {
+            paddingHorizontal: 8,
+            paddingVertical: 5,
+            borderRadius: 6,
+            backgroundColor: colors.primaryLight,
+            borderWidth: 1,
+            borderColor: colors.primary,
+        },
+        startGameMiniText: {
+            ...Typography.caption,
+            color: colors.primary,
+            fontWeight: '700',
         },
         editBtn: {
             paddingHorizontal: 12,
@@ -1659,6 +1850,34 @@ const getStyles = (colors: ThemeColors) => {
             ...Typography.body,
             color: colors.text,
             backgroundColor: colors.surfaceSecondary,
+        },
+        matchRoomBox: {
+            borderWidth: 1,
+            borderColor: colors.border,
+            borderRadius: Layout.radiusMd,
+            backgroundColor: colors.surfaceSecondary,
+            padding: 12,
+            gap: 8,
+        },
+        matchRoomTitle: { ...Typography.label, color: colors.text },
+        matchRoomHint: { ...Typography.bodySmall, color: colors.textSecondary, lineHeight: 18 },
+        matchRoomMessages: { gap: 6 },
+        matchRoomMessage: {
+            borderRadius: Layout.radiusSm,
+            backgroundColor: colors.surface,
+            padding: 8,
+            borderWidth: 1,
+            borderColor: colors.border,
+        },
+        matchRoomMessageText: { ...Typography.bodySmall, color: colors.text },
+        matchRoomMessageMeta: { ...Typography.caption, color: colors.textSecondary, marginTop: 3 },
+        matchRoomEmpty: { ...Typography.bodySmall, color: colors.textSecondary, fontStyle: 'italic' },
+        sendRoomBtn: {
+            width: 42,
+            borderRadius: Layout.radiusMd,
+            backgroundColor: colors.primary,
+            alignItems: 'center',
+            justifyContent: 'center',
         },
         modalFooter: {
             flexDirection: 'row',

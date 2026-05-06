@@ -832,6 +832,7 @@ const getStyles = (colors: ThemeColors) => {
             fontWeight: '700',
         },
         input: {
+            ...Typography.body,
             borderWidth: 1,
             borderColor: colors.border,
             borderRadius: Layout.radiusMd,
@@ -839,7 +840,6 @@ const getStyles = (colors: ThemeColors) => {
             color: colors.text,
             paddingHorizontal: 12,
             paddingVertical: 10,
-            ...Typography.body,
         },
         multilineInput: {
             minHeight: 118,

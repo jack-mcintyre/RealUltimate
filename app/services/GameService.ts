@@ -1,11 +1,46 @@
-import { get, ref, set } from 'firebase/database';
+import { get, onValue, push, ref, set } from 'firebase/database';
 import { db } from '../../firebaseConfig';
-import { GameEvent, GameState } from './types';
+import { GameEvent, GameState, INITIAL_GAME_STATE, isRealTeamId, Player, Team } from './types';
 
 const pastGamesCache = new Map<string, { timestamp: number; data: GameState[] }>();
 const PAST_GAMES_CACHE_TTL_MS = 45 * 1000;
 
+function rosterSnapFromPlayers(
+    players?: Record<string, Player>
+): Record<string, Pick<Player, 'id' | 'name' | 'number' | 'teamId' | 'primaryLine' | 'position'>> {
+    if (!players) return {};
+    return Object.fromEntries(
+        Object.values(players).map((player) => {
+            const snapshot: Pick<Player, 'id' | 'name' | 'number' | 'teamId' | 'primaryLine' | 'position'> = {
+                id: player.id,
+                name: player.name,
+                teamId: player.teamId,
+                ...(player.number ? { number: player.number } : {}),
+                ...(player.primaryLine ? { primaryLine: player.primaryLine } : {}),
+                ...(player.position ? { position: player.position } : {}),
+            };
+            return [player.id, snapshot];
+        })
+    );
+}
+
+/**
+ * 180° rotate around the field center. Used by the recorder to translate
+ * between display coords (what the operator sees with the field flipped)
+ * and canonical storage coords (always "team1 attacks toward y=100").
+ */
+export const flipFieldCoord = (coord: { x: number; y: number }): { x: number; y: number } => ({
+    x: 100 - coord.x,
+    y: 100 - coord.y,
+});
+
 export const GameService = {
+    /** Persist the display-only field flip flag for the recorder UI. */
+    setFieldDisplayFlipped: async (gameId: string, flipped: boolean): Promise<void> => {
+        if (!gameId) return;
+        await set(ref(db, `games/${gameId}/fieldDisplayFlipped`), !!flipped);
+    },
+
     repairLegacyGameData: async (gameId: string): Promise<{ updated: number; total: number }> => {
         const gameRef = ref(db, `games/${gameId}`);
         const snapshot = await get(gameRef);
@@ -109,42 +144,66 @@ export const GameService = {
             }
 
             const pastGamesRef = ref(db, `teams/${teamId}/pastGames`);
-            const pastGamesSnap = await get(pastGamesRef);
+            const linkedGamesRef = ref(db, `teamGameLinks/${teamId}`);
+            const [pastGamesSnap, linkedGamesSnap] = await Promise.all([
+                get(pastGamesRef),
+                get(linkedGamesRef),
+            ]);
             
             const pastGames: GameState[] = [];
-            
+            const gameIds = new Set<string>();
+            const hasLinkIndex = linkedGamesSnap.exists();
+
             if (pastGamesSnap.exists()) {
-                const gameIds = Object.keys(pastGamesSnap.val());
+                Object.keys(pastGamesSnap.val()).forEach((gid) => gameIds.add(gid));
+            }
+
+            if (linkedGamesSnap.exists()) {
+                const entries = linkedGamesSnap.val() as Record<string, { source?: string; profileInclusion?: string }>;
+                Object.entries(entries).forEach(([gameId, link]) => {
+                    if (!link || typeof gameId !== 'string') return;
+                    if (link.source === 'observer_neutral') {
+                        const incl = link.profileInclusion ?? 'pending';
+                        if (incl === 'accepted') {
+                            gameIds.add(gameId);
+                        }
+                        return;
+                    }
+                    gameIds.add(gameId);
+                });
+            }
+
+            if (gameIds.size > 0) {
                 const gameSnapshots = await Promise.all(
-                    gameIds.map(async (gameId) => {
+                    Array.from(gameIds).map(async (gameId) => {
                         const gameSnap = await get(ref(db, `games/${gameId}`));
                         return gameSnap.exists() ? ({ ...gameSnap.val(), gameId } as GameState) : null;
                     })
                 );
 
                 gameSnapshots.forEach((game) => {
-                    if (game) pastGames.push(game);
+                    if (!game) return;
+                    if (game.isGameActive === false) pastGames.push(game);
                 });
-            } else {
-                // Migration: Fallback to full fetch
+            } else if (!hasLinkIndex) {
+                // Fallback for older data created before per-team game link indexes.
                 const gamesRef = ref(db, 'games');
                 const snap = await get(gamesRef);
-                
+
                 if (snap.exists()) {
-                    const migratePromises: Promise<void>[] = [];
                     snap.forEach((childSnap: any) => {
                         const game = childSnap.val();
                         const key = childSnap.key;
-                        
+
                         if (game.team1Id === teamId || game.team2Id === teamId) {
                             if (game.isGameActive === false) {
+                                if (game.recordingSource === 'observer_neutral') {
+                                    return;
+                                }
                                 pastGames.push({ ...game, gameId: key });
-                                // Auto-migrate the missing record
-                                migratePromises.push(set(ref(db, `teams/${teamId}/pastGames/${key}`), true));
                             }
                         }
                     });
-                    await Promise.all(migratePromises);
                 }
             }
 
@@ -161,6 +220,99 @@ export const GameService = {
             console.error("Error fetching past games:", error);
             return [];
         }
+    },
+
+    clearPastGamesCacheForTeam: (teamId: string) => {
+        pastGamesCache.delete(teamId);
+    },
+
+    /**
+     * Neutral observer recording: verifies two spectator (fan) codes, creates linked game without coaching rights.
+     * Neither team receives activeGameId; coaches must accept to show the finished game on the team profile.
+     */
+    createNeutralObserverGame: async (opts: {
+        observerUid: string;
+        teamA: Team;
+        teamB: Team;
+        gameLocation?: string;
+        gameTarget?: number;
+        streamUrl?: string;
+    }): Promise<string> => {
+        const { observerUid, teamA, teamB } = opts;
+        if (!teamA?.id || !teamB?.id || teamA.id === teamB.id) {
+            throw new Error('Two distinct teams required');
+        }
+
+        const [team1Id, team2Id] = [teamA.id, teamB.id].sort();
+        const team1 = team1Id === teamA.id ? teamA : teamB;
+        const team2 = team2Id === teamA.id ? teamB : teamA;
+
+        const newGameRef = push(ref(db, 'games'));
+        const newGameId = newGameRef.key;
+        if (!newGameId) throw new Error('Failed to allocate game ID');
+
+        const recorderPin = Math.floor(1000 + Math.random() * 9000).toString();
+        const rosters = {
+            [team1Id]: rosterSnapFromPlayers(team1.players),
+            [team2Id]: rosterSnapFromPlayers(team2.players),
+        };
+
+        const initialState: GameState = {
+            ...INITIAL_GAME_STATE,
+            gameId: newGameId,
+            team1Id,
+            team2Id,
+            team2Name: team2.name || 'Team',
+            recordingMode: 'observer',
+            trackedTeamIds: [team1Id, team2Id].filter(isRealTeamId),
+            opponentRosterSnapshot: rosterSnapFromPlayers(team2.players),
+            neutralObserverRosters: rosters,
+            recordingSource: 'observer_neutral',
+            observerRecorderUid: observerUid,
+            gameLocation: opts.gameLocation?.trim() || '',
+            score1: 0,
+            score2: 0,
+            possession: team1Id,
+            firstHalfPossession: team1Id,
+            gameTarget: opts.gameTarget ?? 15,
+            isGameActive: true,
+            isHalftime: false,
+            advancedTracking: false,
+            fieldMapEnabled: false,
+            sotgEnabled: false,
+            streamUrl: opts.streamUrl?.trim() || '',
+            gameStartTimestamp: Date.now(),
+            currentRecorderId: observerUid,
+            recorderPin,
+            currentLineupPlayerIds: [],
+            currentPointNumber: 1,
+            pointLineups: {},
+            recordingPerspective: 'standalone',
+        };
+
+        await set(newGameRef, initialState);
+
+        const createdAt = Date.now();
+        const linkBase = {
+            gameId: newGameId,
+            status: 'active' as const,
+            createdAt,
+            source: 'observer_neutral' as const,
+            profileInclusion: 'pending' as const,
+        };
+
+        await set(ref(db, `teamGameLinks/${team1Id}/${newGameId}`), {
+            ...linkBase,
+            teamId: team1Id,
+            opponentTeamId: team2Id,
+        });
+        await set(ref(db, `teamGameLinks/${team2Id}/${newGameId}`), {
+            ...linkBase,
+            teamId: team2Id,
+            opponentTeamId: team1Id,
+        });
+
+        return newGameId;
     },
 
     deleteGame: async (gameId: string, requesterId: string): Promise<void> => {
@@ -186,8 +338,9 @@ export const GameService = {
             }
 
             await set(ref(db, `teams/${game.team1Id}/pastGames/${gameId}`), null);
-            if (game.team2Id) {
-                await set(ref(db, `teams/${game.team2Id}/pastGames/${gameId}`), null);
+            await set(ref(db, `teamGameLinks/${game.team1Id}/${gameId}`), null);
+            if (isRealTeamId(game.team2Id)) {
+                await set(ref(db, `teamGameLinks/${game.team2Id}/${gameId}`), null);
             }
             await set(gameRef, null);
         } catch (error) {
@@ -205,5 +358,12 @@ export const GameService = {
             console.error("Error fetching game history:", error);
             return null;
         }
+    },
+
+    subscribeToGame: (gameId: string, callback: (game: GameState | null) => void) => {
+        const gameRef = ref(db, `games/${gameId}`);
+        return onValue(gameRef, (snapshot) => {
+            callback(snapshot.exists() ? ({ ...snapshot.val(), gameId } as GameState) : null);
+        });
     }
 };

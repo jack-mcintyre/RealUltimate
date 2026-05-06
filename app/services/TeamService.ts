@@ -1,7 +1,8 @@
 import { get, onValue, push, ref, set, runTransaction } from 'firebase/database';
 import { db } from '../../firebaseConfig';
+import { GameService } from './GameService';
 import { isFutureScheduledTimestamp, sanitizeAvailability, SCHEDULE_LIMITS } from './scheduleValidation';
-import { Player, ScheduledGame, Team, TeamJoinCodes, TeamPageConfig } from './types';
+import { Player, PlayerPosition, PlayerPrimaryLine, ScheduledGame, Team, TeamJoinCodes, TeamGameLink, TeamPageConfig } from './types';
 
 const TEAM_LIMITS = Object.freeze({
     nameMin: 2,
@@ -12,7 +13,7 @@ const normalizeTeamName = (value: string): string => {
     return (value || '').replace(/\s+/g, ' ').trim();
 };
 
-const sanitizeForFirebase = (value: any): any => {
+export const sanitizeForFirebase = (value: any): any => {
     if (value === undefined) return undefined;
     if (value === null) return null;
 
@@ -58,6 +59,18 @@ const generateUniqueAccessCode = async (excludeCode?: string): Promise<string> =
     throw new Error('Failed to generate unique access code');
 };
 
+const generateUniquePlayerClaimCode = async (): Promise<string> => {
+    for (let attempt = 0; attempt < 25; attempt++) {
+        const next = generateAccessCode();
+        const snapshot = await get(ref(db, `playerClaimCodes/${next}`));
+        if (!snapshot.exists()) {
+            return next;
+        }
+    }
+
+    throw new Error('Failed to generate unique player claim code');
+};
+
 export const TeamService = {
     createTeam: async (teamName: string, coachId: string, coachEmail: string, coachDisplayName?: string): Promise<string> => {
         try {
@@ -78,6 +91,7 @@ export const TeamService = {
 
             const accessCode = await generateUniqueAccessCode();
             const spectatorCode = await generateUniqueAccessCode(accessCode);
+            const observerCode = await generateUniqueAccessCode(accessCode);
 
             const newTeam: Team = {
                 id: teamId,
@@ -98,7 +112,8 @@ export const TeamService = {
             // Map access code -> { teamId, role }
             await set(ref(db, `accessCodes/${accessCode}`), { teamId, role: 'coach' });
             await set(ref(db, `accessCodes/${spectatorCode}`), { teamId, role: 'spectator' });
-            await set(ref(db, `teamJoinCodes/${teamId}`), { coach: accessCode, spectator: spectatorCode } as TeamJoinCodes);
+            await set(ref(db, `accessCodes/${observerCode}`), { teamId, role: 'observer' });
+            await set(ref(db, `teamJoinCodes/${teamId}`), { coach: accessCode, spectator: spectatorCode, observer: observerCode } as TeamJoinCodes);
 
             // Automatically add to user's coached list
             await set(ref(db, `users/${coachId}/coached_teams/${teamId}`), true);
@@ -214,7 +229,138 @@ export const TeamService = {
         return teamSnapshot.exists() ? (teamSnapshot.val() as Team) : null;
     },
 
-    addPlayer: async (teamId: string, playerName: string, actingUserId: string, playerNumber?: string): Promise<string> => {
+    /** Resolves a team only when the code is the public spectator (fan) code — kept for backward compat. */
+    lookupTeamBySpectatorCode: async (accessCode: string): Promise<Team | null> => {
+        const normalized = accessCode.trim().toUpperCase();
+        if (!/^[A-Z0-9]{6}$/.test(normalized)) return null;
+        const accessCodeRef = ref(db, `accessCodes/${normalized}`);
+        const snapshot = await get(accessCodeRef);
+        if (!snapshot.exists()) return null;
+        const data = snapshot.val() as { teamId: string; role?: string };
+        if (data.role !== 'spectator' || !data.teamId) return null;
+        const teamSnapshot = await get(ref(db, `teams/${data.teamId}`));
+        return teamSnapshot.exists() ? (teamSnapshot.val() as Team) : null;
+    },
+
+    /**
+     * Resolves a team only when the code is the dedicated observer / scorer code.
+     * Used for the neutral-scorer flow so coaches can rotate scoring access without
+     * affecting fan follow links.
+     */
+    lookupTeamByObserverCode: async (accessCode: string): Promise<Team | null> => {
+        const normalized = accessCode.trim().toUpperCase();
+        if (!/^[A-Z0-9]{6}$/.test(normalized)) return null;
+        const accessCodeRef = ref(db, `accessCodes/${normalized}`);
+        const snapshot = await get(accessCodeRef);
+        if (!snapshot.exists()) return null;
+        const data = snapshot.val() as { teamId: string; role?: string };
+        if (data.role !== 'observer' || !data.teamId) return null;
+        const teamSnapshot = await get(ref(db, `teams/${data.teamId}`));
+        return teamSnapshot.exists() ? (teamSnapshot.val() as Team) : null;
+    },
+
+    /**
+     * Ensures an observer code exists for legacy teams (created before observer
+     * codes were introduced). Idempotent. Coaches and managers can call this.
+     */
+    ensureObserverCode: async (teamId: string, actingUserId: string): Promise<string> => {
+        const teamSnap = await get(ref(db, `teams/${teamId}`));
+        if (!teamSnap.exists()) throw new Error('Team not found');
+        const team = teamSnap.val() as Team;
+        const isCoach = team.coachId === actingUserId;
+        const isManager = !!team.managers?.[actingUserId];
+        if (!isCoach && !isManager) throw new Error('Permission denied');
+
+        const codesSnap = await get(ref(db, `teamJoinCodes/${teamId}`));
+        const codes: TeamJoinCodes = codesSnap.exists() ? (codesSnap.val() as TeamJoinCodes) : ({} as TeamJoinCodes);
+        if (codes.observer) return codes.observer;
+
+        const observerCode = await generateUniqueAccessCode(codes.coach);
+        await set(ref(db, `accessCodes/${observerCode}`), { teamId, role: 'observer' });
+        await set(ref(db, `teamJoinCodes/${teamId}/observer`), observerCode);
+        return observerCode;
+    },
+
+    /**
+     * Rotates the observer code: invalidates the old mapping and issues a new one.
+     * Returns the new code. Coaches and managers can call this.
+     */
+    rotateObserverCode: async (teamId: string, actingUserId: string): Promise<string> => {
+        const teamSnap = await get(ref(db, `teams/${teamId}`));
+        if (!teamSnap.exists()) throw new Error('Team not found');
+        const team = teamSnap.val() as Team;
+        const isCoach = team.coachId === actingUserId;
+        const isManager = !!team.managers?.[actingUserId];
+        if (!isCoach && !isManager) throw new Error('Permission denied');
+
+        const codesSnap = await get(ref(db, `teamJoinCodes/${teamId}`));
+        const codes: TeamJoinCodes = codesSnap.exists() ? (codesSnap.val() as TeamJoinCodes) : ({} as TeamJoinCodes);
+        const oldObserver = codes.observer;
+
+        const next = await generateUniqueAccessCode(oldObserver);
+        await set(ref(db, `accessCodes/${next}`), { teamId, role: 'observer' });
+        if (oldObserver) {
+            await set(ref(db, `accessCodes/${oldObserver}`), null);
+        }
+        await set(ref(db, `teamJoinCodes/${teamId}/observer`), next);
+        return next;
+    },
+
+    subscribeToTeamGameLinks: (teamId: string, callback: (links: Record<string, TeamGameLink>) => void) => {
+        const linksRef = ref(db, `teamGameLinks/${teamId}`);
+        return onValue(linksRef, (snapshot) => {
+            callback(((snapshot.val() || {}) as Record<string, TeamGameLink>) || {});
+        });
+    },
+
+    acceptObserverNeutralGameOnProfile: async (teamId: string, gameId: string, actingUserId: string): Promise<void> => {
+        const teamRef = ref(db, `teams/${teamId}`);
+        const teamSnap = await get(teamRef);
+        if (!teamSnap.exists()) throw new Error('Team not found');
+        const team = teamSnap.val() as Team;
+        const isCoach = team.coachId === actingUserId;
+        const isManager = !!team.managers?.[actingUserId];
+        if (!isCoach && !isManager) throw new Error('Permission denied');
+
+        const linkRef = ref(db, `teamGameLinks/${teamId}/${gameId}`);
+        const linkSnap = await get(linkRef);
+        if (!linkSnap.exists()) throw new Error('Game link not found');
+        const link = linkSnap.val() as TeamGameLink;
+        if (link.source !== 'observer_neutral') throw new Error('Not an observer-neutral game');
+
+        await set(ref(db, `teamGameLinks/${teamId}/${gameId}/profileInclusion`), 'accepted');
+        await set(ref(db, `teams/${teamId}/pastGames/${gameId}`), true);
+        GameService.clearPastGamesCacheForTeam(teamId);
+    },
+
+    declineObserverNeutralGameOnProfile: async (teamId: string, gameId: string, actingUserId: string): Promise<void> => {
+        const teamRef = ref(db, `teams/${teamId}`);
+        const teamSnap = await get(teamRef);
+        if (!teamSnap.exists()) throw new Error('Team not found');
+        const team = teamSnap.val() as Team;
+        const isCoach = team.coachId === actingUserId;
+        const isManager = !!team.managers?.[actingUserId];
+        if (!isCoach && !isManager) throw new Error('Permission denied');
+
+        const linkRef = ref(db, `teamGameLinks/${teamId}/${gameId}`);
+        const linkSnap = await get(linkRef);
+        if (!linkSnap.exists()) throw new Error('Game link not found');
+        const link = linkSnap.val() as TeamGameLink;
+        if (link.source !== 'observer_neutral') throw new Error('Not an observer-neutral game');
+
+        await set(ref(db, `teamGameLinks/${teamId}/${gameId}/profileInclusion`), 'declined');
+        await set(ref(db, `teams/${teamId}/pastGames/${gameId}`), null);
+        GameService.clearPastGamesCacheForTeam(teamId);
+    },
+
+    addPlayer: async (
+        teamId: string,
+        playerName: string,
+        actingUserId: string,
+        playerNumber?: string,
+        primaryLine: PlayerPrimaryLine = 'flex',
+        position: PlayerPosition = 'hybrid'
+    ): Promise<string> => {
         try {
             const teamRef = ref(db, `teams/${teamId}`);
             const teamSnapshot = await get(teamRef);
@@ -239,7 +385,9 @@ export const TeamService = {
                 id: playerId,
                 name: playerName,
                 number: playerNumber,
-                teamId: teamId
+                teamId: teamId,
+                primaryLine,
+                position,
             };
 
             await set(newPlayerRef, newPlayer);
@@ -720,5 +868,192 @@ export const TeamService = {
 
         const roleRef = ref(db, `teams/${teamId}/players/${playerId}/role`);
         await set(roleRef, role || null);
+    },
+
+    updatePlayerLineProfile: async (
+        teamId: string,
+        playerId: string,
+        primaryLine: PlayerPrimaryLine | null,
+        position: PlayerPosition | null,
+        userId: string
+    ): Promise<void> => {
+        const teamRef = ref(db, `teams/${teamId}`);
+        const snapshot = await get(teamRef);
+        if (!snapshot.exists()) {
+            throw new Error('Team not found');
+        }
+
+        const team = snapshot.val() as Team;
+        const isCoach = team.coachId === userId;
+        const isManager = !!team.managers?.[userId];
+        if (!isCoach && !isManager) {
+            throw new Error('Permission denied');
+        }
+
+        const allowedLines: (PlayerPrimaryLine | null)[] = ['O', 'D', 'flex', null];
+        const allowedPositions: (PlayerPosition | null)[] = ['handler', 'cutter', 'hybrid', null];
+        if (!allowedLines.includes(primaryLine)) throw new Error('Invalid line value');
+        if (!allowedPositions.includes(position)) throw new Error('Invalid position value');
+
+        await set(ref(db, `teams/${teamId}/players/${playerId}/primaryLine`), primaryLine || null);
+        await set(ref(db, `teams/${teamId}/players/${playerId}/position`), position || null);
+    },
+
+    updatePlayerDisplayName: async (
+        teamId: string,
+        playerId: string,
+        name: string,
+        userId: string
+    ): Promise<void> => {
+        const teamRef = ref(db, `teams/${teamId}`);
+        const snapshot = await get(teamRef);
+        if (!snapshot.exists()) {
+            throw new Error('Team not found');
+        }
+
+        const team = snapshot.val() as Team;
+        const isCoach = team.coachId === userId;
+        const isManager = !!team.managers?.[userId];
+        if (!isCoach && !isManager) {
+            throw new Error('Permission denied');
+        }
+
+        const trimmed = (name || '').trim();
+        if (!trimmed) {
+            throw new Error('Name cannot be empty');
+        }
+        if (trimmed.length > 80) {
+            throw new Error('Name must be 80 characters or fewer');
+        }
+
+        await set(ref(db, `teams/${teamId}/players/${playerId}/name`), trimmed);
+    },
+
+    updatePlayerNumber: async (
+        teamId: string,
+        playerId: string,
+        number: string | null,
+        userId: string
+    ): Promise<void> => {
+        const teamRef = ref(db, `teams/${teamId}`);
+        const snapshot = await get(teamRef);
+        if (!snapshot.exists()) {
+            throw new Error('Team not found');
+        }
+
+        const team = snapshot.val() as Team;
+        const isCoach = team.coachId === userId;
+        const isManager = !!team.managers?.[userId];
+        if (!isCoach && !isManager) {
+            throw new Error('Permission denied');
+        }
+
+        const trimmed = (number ?? '').trim().slice(0, 4);
+        const safe = trimmed.replace(/[^A-Za-z0-9]/g, '');
+
+        await set(ref(db, `teams/${teamId}/players/${playerId}/number`), safe || null);
+    },
+
+    createPlayerClaimCode: async (
+        teamId: string,
+        playerId: string,
+        actingUserId: string
+    ): Promise<string> => {
+        const teamRef = ref(db, `teams/${teamId}`);
+        const snapshot = await get(teamRef);
+        if (!snapshot.exists()) {
+            throw new Error('Team not found');
+        }
+
+        const team = snapshot.val() as Team;
+        const isCoach = team.coachId === actingUserId;
+        const isManager = !!team.managers?.[actingUserId];
+        if (!isCoach && !isManager) {
+            throw new Error('Permission denied');
+        }
+
+        const player = team.players?.[playerId];
+        if (!player) {
+            throw new Error('Player not found');
+        }
+        if (player.claimedByUid) {
+            throw new Error('This player has already been claimed.');
+        }
+
+        const claimCode = await generateUniquePlayerClaimCode();
+        const createdAt = Date.now();
+        await set(ref(db, `playerClaimCodes/${claimCode}`), {
+            teamId,
+            playerId,
+            createdBy: actingUserId,
+            createdAt,
+        });
+        await set(ref(db, `teams/${teamId}/players/${playerId}/claimCodeHash`), claimCode);
+        await set(ref(db, `teams/${teamId}/players/${playerId}/claimCodeCreatedAt`), createdAt);
+        return claimCode;
+    },
+
+    claimPlayerByCode: async (
+        claimCode: string,
+        userId: string
+    ): Promise<{ teamId: string; playerId: string }> => {
+        const normalizedCode = claimCode.trim().toUpperCase();
+        const codeSnap = await get(ref(db, `playerClaimCodes/${normalizedCode}`));
+        if (!codeSnap.exists()) {
+            throw new Error('Invalid player claim code.');
+        }
+
+        const mapping = codeSnap.val() as { teamId?: string; playerId?: string };
+        if (!mapping.teamId || !mapping.playerId) {
+            throw new Error('Invalid player claim code.');
+        }
+
+        const playerRef = ref(db, `teams/${mapping.teamId}/players/${mapping.playerId}`);
+        const playerSnap = await get(playerRef);
+        if (!playerSnap.exists()) {
+            throw new Error('Player not found.');
+        }
+
+        const player = playerSnap.val() as Player;
+        if (player.claimedByUid && player.claimedByUid !== userId) {
+            throw new Error('This player has already been claimed.');
+        }
+
+        await set(ref(db, `teams/${mapping.teamId}/players/${mapping.playerId}/claimedByUid`), userId);
+        await set(ref(db, `teams/${mapping.teamId}/players/${mapping.playerId}/verifiedRosterLink`), true);
+        await set(ref(db, `teams/${mapping.teamId}/players/${mapping.playerId}/claimCodeHash`), null);
+        await set(ref(db, `teams/${mapping.teamId}/players/${mapping.playerId}/claimCodeCreatedAt`), null);
+        await set(ref(db, `users/${userId}/claimedPlayers/${mapping.teamId}_${mapping.playerId}`), {
+            teamId: mapping.teamId,
+            playerId: mapping.playerId,
+            claimedAt: Date.now(),
+        });
+        await set(ref(db, `playerClaimCodes/${normalizedCode}`), null);
+
+        return { teamId: mapping.teamId, playerId: mapping.playerId };
+    },
+
+    updatePlayerStatPrivacy: async (
+        teamId: string,
+        playerId: string,
+        statPrivacy: 'public' | 'team' | 'private',
+        actingUserId: string
+    ): Promise<void> => {
+        const teamRef = ref(db, `teams/${teamId}`);
+        const snapshot = await get(teamRef);
+        if (!snapshot.exists()) {
+            throw new Error('Team not found');
+        }
+
+        const team = snapshot.val() as Team;
+        const player = team.players?.[playerId];
+        const isCoach = team.coachId === actingUserId;
+        const isManager = !!team.managers?.[actingUserId];
+        const isClaimedPlayer = player?.claimedByUid === actingUserId;
+        if (!isCoach && !isManager && !isClaimedPlayer) {
+            throw new Error('Permission denied');
+        }
+
+        await set(ref(db, `teams/${teamId}/players/${playerId}/statPrivacy`), statPrivacy);
     }
 };

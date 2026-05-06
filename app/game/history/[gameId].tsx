@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import * as Clipboard from 'expo-clipboard';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import React, { useEffect, useRef, useState } from 'react';
@@ -8,6 +9,7 @@ import { WebView } from 'react-native-webview';
 import { auth } from '../../../firebaseConfig';
 import BrandedDialog from '../../../src/components/BrandedDialog';
 import { GameService } from '../../services/GameService';
+import { SafetyService } from '../../services/SafetyService';
 import { STREAM_HOST_ALLOWLIST, validateExternalUrl } from '../../services/linkUtils';
 import { TeamService } from '../../services/TeamService';
 import { GameState, PlayerStats, PredictionSnapshot, Team } from '../../services/types';
@@ -69,44 +71,59 @@ const BoxScoreCard = React.forwardRef<View, {
     mvpName: string | null;
     mvpStats: string;
     date: string;
-    isWin: boolean;
+    matchOutcome: 'win' | 'loss' | 'tie';
     colors: ThemeColors;
-}>(({ teamName, opponentName, ourScore, theirScore, mvpName, mvpStats, date, isWin, colors }, ref) => {
+    accentColor?: string;
+}>(({ teamName, opponentName, ourScore, theirScore, mvpName, mvpStats, date, matchOutcome, colors, accentColor }, ref) => {
+    const accent =
+        accentColor ||
+        (matchOutcome === 'win' ? '#22C55E' : matchOutcome === 'tie' ? '#F59E0B' : '#EF4444');
+    const headline =
+        matchOutcome === 'win'
+            ? 'WON THE POINTS THAT MATTERED'
+            : matchOutcome === 'tie'
+              ? 'ALL SQUARE AT THE HORN'
+              : 'FINAL WHISTLE';
+    const resultLabel = matchOutcome === 'win' ? 'VICTORY' : matchOutcome === 'tie' ? 'DRAW' : 'DEFEAT';
     return (
         <View ref={ref as any} style={{
             width: 360,
-            backgroundColor: isWin ? '#0F172A' : '#1E1B4B',
-            borderRadius: 20,
-            padding: 32,
+            backgroundColor: '#0B1120',
+            borderRadius: 28,
+            padding: 26,
             alignItems: 'center',
             overflow: 'hidden',
         }} collapsable={false}>
-            {/* Gradient accent bar */}
-            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 4, backgroundColor: isWin ? '#22C55E' : '#EF4444' }} />
+            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 7, backgroundColor: accent }} />
+            <View style={{ position: 'absolute', left: -40, top: 60, width: 130, height: 130, borderRadius: 65, borderWidth: 2, borderColor: 'rgba(255,255,255,0.06)' }} />
+            <View style={{ position: 'absolute', right: -26, bottom: 44, width: 92, height: 92, borderRadius: 46, borderWidth: 2, borderColor: 'rgba(255,255,255,0.07)' }} />
+            <View style={{ position: 'absolute', top: 92, bottom: 58, left: 34, width: 1, backgroundColor: 'rgba(255,255,255,0.08)' }} />
+            <View style={{ position: 'absolute', top: 92, bottom: 58, right: 34, width: 1, backgroundColor: 'rgba(255,255,255,0.08)' }} />
             
             {/* Header */}
-            <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontWeight: 'bold', letterSpacing: 3, marginBottom: 4 }}>MATCH RESULT</Text>
+            <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontWeight: 'bold', letterSpacing: 3, marginBottom: 4 }}>REALULTIMATE MATCH CARD</Text>
             <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12, marginBottom: 20 }}>{date}</Text>
             
             {/* Scoreboard */}
             <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}>
                 <View style={{ flex: 1, alignItems: 'center' }}>
-                    <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: 'rgba(255,255,255,0.1)', alignItems: 'center', justifyContent: 'center', marginBottom: 8 }}>
+                    <View style={{ width: 52, height: 52, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.1)', borderWidth: 1, borderColor: accent, alignItems: 'center', justifyContent: 'center', marginBottom: 8 }}>
                         <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 22 }}>{teamName.charAt(0)}</Text>
                     </View>
                     <Text style={{ color: '#fff', fontWeight: '600', fontSize: 13 }} numberOfLines={1}>{teamName}</Text>
                 </View>
                 
-                <View style={{ paddingHorizontal: 16 }}>
-                    <Text style={{ color: '#fff', fontWeight: '900', fontSize: 44, letterSpacing: -2 }}>
+                <View style={{ paddingHorizontal: 12, alignItems: 'center' }}>
+                    <Text style={{ color: '#fff', fontWeight: '900', fontSize: 46, letterSpacing: -2 }}>
                         {ourScore}
                         <Text style={{ color: 'rgba(255,255,255,0.3)' }}> - </Text>
                         {theirScore}
                     </Text>
+                    <Text style={{ color: accent, fontSize: 10, fontWeight: '800', letterSpacing: 2 }}>{headline}</Text>
                 </View>
                 
                 <View style={{ flex: 1, alignItems: 'center' }}>
-                    <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: 'rgba(255,255,255,0.1)', alignItems: 'center', justifyContent: 'center', marginBottom: 8 }}>
+                    <View style={{ width: 52, height: 52, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.1)', alignItems: 'center', justifyContent: 'center', marginBottom: 8 }}>
                         <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 22 }}>{opponentName.charAt(0)}</Text>
                     </View>
                     <Text style={{ color: '#fff', fontWeight: '600', fontSize: 13 }} numberOfLines={1}>{opponentName}</Text>
@@ -115,12 +132,12 @@ const BoxScoreCard = React.forwardRef<View, {
             
             {/* Result Badge */}
             <View style={{ 
-                backgroundColor: isWin ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)', 
+                backgroundColor: matchOutcome === 'win' ? 'rgba(34,197,94,0.15)' : matchOutcome === 'tie' ? 'rgba(245,158,11,0.18)' : 'rgba(239,68,68,0.15)',
                 paddingHorizontal: 20, paddingVertical: 6, borderRadius: 20, marginBottom: 20,
-                borderWidth: 1, borderColor: isWin ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'
+                borderWidth: 1, borderColor: accent,
             }}>
-                <Text style={{ color: isWin ? '#4ADE80' : '#FCA5A5', fontWeight: 'bold', fontSize: 12, letterSpacing: 2 }}>
-                    {isWin ? 'VICTORY' : 'DEFEAT'}
+                <Text style={{ color: accent, fontWeight: 'bold', fontSize: 12, letterSpacing: 2 }}>
+                    {resultLabel}
                 </Text>
             </View>
             
@@ -838,10 +855,11 @@ export default function GameHistoryScreen() {
     }, [isReplayAutoPlaying, replaySpeedMs, game?.history]);
 
     const formatEventMessage = (event: any) => {
-        const playerName = team?.players?.[event.playerId]?.name || 'Unknown Player';
-        const assistName = team?.players?.[event.assistPlayerId]?.name;
-        const throwerName = team?.players?.[event.fromPlayerId || event.assistPlayerId]?.name;
-        const receiverName = team?.players?.[event.toPlayerId || event.playerId]?.name;
+        const playerPool = { ...(team?.players || {}), ...(game?.opponentRosterSnapshot || {}) };
+        const playerName = playerPool[event.playerId]?.name || 'Unknown Player';
+        const assistName = playerPool[event.assistPlayerId]?.name;
+        const throwerName = playerPool[event.fromPlayerId || event.assistPlayerId]?.name;
+        const receiverName = playerPool[event.toPlayerId || event.playerId]?.name;
         const time = new Date(event.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
         switch (event.type) {
@@ -854,8 +872,8 @@ export default function GameHistoryScreen() {
             case 'Pass': return { icon: 'swap-horizontal', color: colors.textSecondary, title: 'Pass', desc: throwerName && receiverName ? `Pass from ${throwerName} to ${receiverName}.` : (assistName ? `Pass from ${assistName} to ${playerName}.` : `${playerName} completed pass.`), time };
             case 'Callahan_US': return { icon: 'flash', color: colors.success, title: `${team?.name} Callahan`, desc: `${playerName} intercepted for a goal!`, time, isGoal: true };
             case 'Callahan_THEM': return { icon: 'flash', color: '#b45309', title: 'Opp. Callahan', desc: `Opponent intercepted ${playerName} for a goal!`, time };
-            case 'Opponent Score': return { icon: 'flag', color: colors.error, title: 'Opponent Goal', desc: `Opponent scored.`, time, isGoal: true };
-            case 'Opponent Turnover': return { icon: 'sync', color: colors.success, title: 'Opp. Turnover', desc: `Opponent turned it over.`, time };
+            case 'Opponent Score': return { icon: 'flag', color: colors.error, title: 'Opponent Goal', desc: event.playerId ? `${playerName} scored for the opponent.` : `Opponent scored.`, time, isGoal: true };
+            case 'Opponent Turnover': return { icon: 'sync', color: colors.success, title: 'Opp. Turnover', desc: event.playerId ? `Turnover by ${playerName}.` : `Opponent turned it over.`, time };
             case 'Halftime': return { icon: 'pause-circle', color: colors.textSecondary, title: 'HALFTIME', desc: `First half completed.`, time };
             case 'End Halftime': return { icon: 'play-circle', color: colors.textSecondary, title: 'RESUME', desc: `Second half started.`, time };
             default: return { icon: 'information-circle', color: colors.textSecondary, title: 'System Event', desc: `Game Event: ${event.type}`, time };
@@ -882,6 +900,23 @@ export default function GameHistoryScreen() {
                 icon: 'warning-outline',
                 accentColor: colors.error,
             });
+        }
+    };
+
+    const handleReportMatch = async () => {
+        try {
+            const reporterUid = auth.currentUser?.uid || '';
+            if (!reporterUid || !gameId) throw new Error('Not authenticated');
+            await SafetyService.reportContent({
+                reporterUid,
+                targetType: 'game',
+                targetId: gameId,
+                reason: 'Match report review',
+                details: `User requested moderation review for ${team?.name || 'Team'} vs ${opponentName || 'Opponent'}.`,
+            });
+            setInfoDialog({ title: 'Report Sent', message: 'Thanks. This match report was queued for review.', icon: 'shield-checkmark-outline' });
+        } catch {
+            setInfoDialog({ title: 'Report Failed', message: 'Could not send this report. Please try again or contact support.', icon: 'warning-outline', accentColor: colors.error });
         }
     };
 
@@ -952,18 +987,33 @@ export default function GameHistoryScreen() {
 
     const isCoach = auth.currentUser?.uid === team.coachId;
     const isTeam1 = game.team1Id === team.id;
-    const opponentName = isTeam1 ? game.team2Name || "Opponent" : team.name;
+    const opponentName = isTeam1 ? game.team2Name || "Opponent" : "Opponent";
     const isGuest = isTeam1 && (!game.team2Id || game.team2Name);
     const ourScore = isTeam1 ? game.score1 : game.score2;
     const theirScore = isTeam1 ? game.score2 : game.score1;
     const isWin = ourScore > theirScore;
-    const finalResultLabel = ourScore === theirScore ? 'Tie' : (isWin ? 'Win' : 'Loss');
+    const isTie = ourScore === theirScore;
+    const matchOutcome: 'win' | 'loss' | 'tie' = isTie ? 'tie' : isWin ? 'win' : 'loss';
+    const finalResultLabel = isTie ? 'Tie' : (isWin ? 'Win' : 'Loss');
+    const teamAccent = team.pageConfig?.theme?.accentColor || colors.primary;
 
     // --- CALCULATE ADVANCED STATS ---
     const stats: Record<string, PlayerStats> = {};
     if (team.players) {
         Object.keys(team.players).forEach(pId => {
-            stats[pId] = { goals: 0, assists: 0, blocks: 0, turns: 0, passes: 0, callahans: 0, timeWithDisc: 0 };
+            stats[pId] = {
+                goals: 0,
+                assists: 0,
+                blocks: 0,
+                turns: 0,
+                passes: 0,
+                callahans: 0,
+                timeWithDisc: 0,
+                pointsPlayed: 0,
+                oPointsPlayed: 0,
+                dPointsPlayed: 0,
+                pointDiff: 0,
+            };
         });
     }
 
@@ -1006,12 +1056,26 @@ export default function GameHistoryScreen() {
             momentumBlocks.push({ usScore: runUsScore, themScore: runThemScore, scoredByUs: true });
             if (currentPointType === 'O') { oLinePoints++; oLineScores++; }
             else { dLinePoints++; dLineScores++; } 
+            (e.lineupPlayerIds || []).forEach((playerId: string) => {
+                if (!stats[playerId]) return;
+                stats[playerId].pointsPlayed = (stats[playerId].pointsPlayed || 0) + 1;
+                if ((e.lineType || currentPointType) === 'O') stats[playerId].oPointsPlayed = (stats[playerId].oPointsPlayed || 0) + 1;
+                if ((e.lineType || currentPointType) === 'D') stats[playerId].dPointsPlayed = (stats[playerId].dPointsPlayed || 0) + 1;
+                stats[playerId].pointDiff = (stats[playerId].pointDiff || 0) + 1;
+            });
             currentPointType = 'D'; 
         } else if (e.type === 'Opponent Score' || e.type === 'Callahan_THEM') {
             runThemScore++;
             momentumBlocks.push({ usScore: runUsScore, themScore: runThemScore, scoredByUs: false });
             if (currentPointType === 'O') { oLinePoints++; } 
             else { dLinePoints++; } 
+            (e.lineupPlayerIds || []).forEach((playerId: string) => {
+                if (!stats[playerId]) return;
+                stats[playerId].pointsPlayed = (stats[playerId].pointsPlayed || 0) + 1;
+                if ((e.lineType || currentPointType) === 'O') stats[playerId].oPointsPlayed = (stats[playerId].oPointsPlayed || 0) + 1;
+                if ((e.lineType || currentPointType) === 'D') stats[playerId].dPointsPlayed = (stats[playerId].dPointsPlayed || 0) + 1;
+                stats[playerId].pointDiff = (stats[playerId].pointDiff || 0) - 1;
+            });
             currentPointType = 'O'; 
         } else if (e.type === 'Halftime') {
             currentPointType = game.firstHalfPossession === team.id ? 'D' : 'O';
@@ -1034,6 +1098,47 @@ export default function GameHistoryScreen() {
     const mvp = sortedMVP.length > 0 ? sortedMVP[0] : null;
     const runnerUps = sortedMVP.slice(1, 4);
     const mvpStatsStr = mvp ? `${mvp.goals}G ${mvp.assists}A ${mvp.blocks}D${mvp.callahans > 0 ? ` ${mvp.callahans}C` : ''}` : '';
+
+    const csvEscape = (value: any) => {
+        const text = String(value ?? '');
+        if (/[",\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+        return text;
+    };
+
+    const handleExportCsv = async () => {
+        const headers = ['Player', 'Number', 'Primary Line', 'Position', 'Goals', 'Assists', 'Blocks', 'Turns', 'Passes', 'Points Played', 'O Points', 'D Points', 'Point Diff'];
+        const rows = playersWithStats.map((player) => {
+            const rosterPlayer = team.players?.[player.id];
+            return [
+                player.name,
+                rosterPlayer?.number || '',
+                rosterPlayer?.primaryLine || 'flex',
+                rosterPlayer?.position || rosterPlayer?.role || 'hybrid',
+                player.goals,
+                player.assists,
+                player.blocks,
+                player.turns,
+                player.passes,
+                player.pointsPlayed || 0,
+                player.oPointsPlayed || 0,
+                player.dPointsPlayed || 0,
+                player.pointDiff || 0,
+            ];
+        });
+        const csv = [headers, ...rows].map((row) => row.map(csvEscape).join(',')).join('\n');
+
+        try {
+            if (Platform.OS === 'web' && navigator?.clipboard) {
+                await navigator.clipboard.writeText(csv);
+            } else {
+                await Clipboard.setStringAsync(csv);
+            }
+            setInfoDialog({ title: 'CSV Copied', message: 'Roster stats CSV copied to clipboard for Sheets or Excel.', icon: 'document-text-outline' });
+        } catch {
+            setInfoDialog({ title: 'Export Failed', message: 'Could not copy the CSV export. Please try again.', icon: 'warning-outline', accentColor: colors.error });
+        }
+    };
+
     const passChemistry = buildPassChemistry(game.history || [], team.players);
 
     const throwProfileStats: Record<string, { attempts: number; completions: number; turnovers: number; goals: number; distanceSum: number; samples: number }> = {};
@@ -1186,7 +1291,8 @@ export default function GameHistoryScreen() {
         })
         .sort((a, b) => b.loadScore - a.loadScore);
 
-    const virtualLinePlayers = workloadRows.slice(0, 7);
+    const virtualLineSize = game?.gameFormat === '5v5' ? 5 : 7;
+    const virtualLinePlayers = workloadRows.slice(0, virtualLineSize);
     const virtualLinePlayerIds = virtualLinePlayers.map((p) => p.id);
     let lineChemistrySum = 0;
     let lineChemistryCount = 0;
@@ -1218,6 +1324,8 @@ export default function GameHistoryScreen() {
         ? Math.max(0, Math.min(100, Math.round(50 + (clutchSuccess * 7) - (clutchErrors * 10))))
         : 50;
     const currentWinProbPct = Math.round(prevWinProb * 100);
+    const positiveSwing = biggestPositiveSwing as { swingPct: number; event: any; score: string } | null;
+    const negativeSwing = biggestNegativeSwing as { swingPct: number; event: any; score: string } | null;
     const opponentConversionOnDPoints = dLinePoints > 0 ? 100 - dLineEff : 0;
     const forcedOpponentTurnRate = (forcedOpponentTurnovers + opponentScoringEvents) > 0
         ? Math.round((forcedOpponentTurnovers / (forcedOpponentTurnovers + opponentScoringEvents)) * 100)
@@ -1332,22 +1440,22 @@ export default function GameHistoryScreen() {
                         </TouchableOpacity>
                         
                         {/* Animated result icon */}
-                        <View style={[styles.modalIconBg, { backgroundColor: isWin ? '#dcfce7' : colors.errorBg }]}>
-                            <Ionicons name={isWin ? "trophy" : "shield-half"} size={48} color={isWin ? colors.success : colors.error} />
+                        <View style={[styles.modalIconBg, { backgroundColor: isTie ? 'rgba(245, 158, 11, 0.2)' : isWin ? '#dcfce7' : colors.errorBg }]}>
+                            <Ionicons name={isTie ? 'git-merge-outline' : isWin ? "trophy" : "shield-half"} size={48} color={isTie ? colors.warning : isWin ? colors.success : colors.error} />
                         </View>
-                        <Text style={styles.modalHeader}>{isWin ? "Victory! 🎉" : "Tough battle out there."}</Text>
+                        <Text style={styles.modalHeader}>{isTie ? "It's a draw." : isWin ? "Victory! 🎉" : "Tough battle out there."}</Text>
                         
                         {/* Score card */}
                         <View style={styles.modalScoreCard}>
                             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
                                 <View style={{ alignItems: 'center', flex: 1 }}>
                                     <Text style={{ ...getTypography(colors).label, marginBottom: 4 }}>{team.name}</Text>
-                                    <Text style={{ ...getTypography(colors).title, fontSize: 36, color: ourScore > theirScore ? colors.success : colors.text }}>{ourScore}</Text>
+                                    <Text style={{ ...getTypography(colors).title, fontSize: 36, color: isTie ? colors.warning : ourScore > theirScore ? colors.success : colors.text }}>{ourScore}</Text>
                                 </View>
                                 <Text style={{ ...getTypography(colors).title, fontSize: 20, color: colors.textSecondary, marginHorizontal: 12 }}>-</Text>
                                 <View style={{ alignItems: 'center', flex: 1 }}>
                                     <Text style={{ ...getTypography(colors).label, marginBottom: 4 }}>{opponentName}</Text>
-                                    <Text style={{ ...getTypography(colors).title, fontSize: 36, color: theirScore > ourScore ? colors.error : colors.text }}>{theirScore}</Text>
+                                    <Text style={{ ...getTypography(colors).title, fontSize: 36, color: isTie ? colors.warning : theirScore > ourScore ? colors.error : colors.text }}>{theirScore}</Text>
                                 </View>
                             </View>
                         </View>
@@ -1466,7 +1574,7 @@ export default function GameHistoryScreen() {
                             <TouchableOpacity style={styles.scoreSide} onPress={() => router.push(`/team/${team.id}`)}>
                                 <TeamLogo name={team.name} />
                                 <Text style={styles.scoreLabel} numberOfLines={1}>{team.name.toUpperCase()}</Text>
-                                <Text style={[styles.scoreNumber, { color: ourScore > theirScore ? colors.success : colors.text }]}>{ourScore}</Text>
+                                <Text style={[styles.scoreNumber, { color: isTie ? colors.warning : ourScore > theirScore ? colors.success : colors.text }]}>{ourScore}</Text>
                             </TouchableOpacity>
                             
                             <View style={styles.scoreCenter}>
@@ -1476,7 +1584,7 @@ export default function GameHistoryScreen() {
                             <TouchableOpacity style={styles.scoreSide} disabled={!!isGuest}>
                                 <TeamLogo name={opponentName} isGuest={!!isGuest} />
                                 <Text style={styles.scoreLabel} numberOfLines={1}>{opponentName.toUpperCase()}</Text>
-                                <Text style={[styles.scoreNumber, { color: theirScore > ourScore ? colors.error : colors.text }]}>{theirScore}</Text>
+                                <Text style={[styles.scoreNumber, { color: isTie ? colors.warning : theirScore > ourScore ? colors.error : colors.text }]}>{theirScore}</Text>
                             </TouchableOpacity>
                         </View>
                         <Text style={styles.finalText}>FINAL</Text>
@@ -1494,8 +1602,9 @@ export default function GameHistoryScreen() {
                                 mvpName={mvp?.name || null}
                                 mvpStats={mvpStatsStr}
                                 date={matchDate}
-                                isWin={isWin}
+                                matchOutcome={matchOutcome}
                                 colors={colors}
+                                accentColor={teamAccent}
                             />
                         </ViewShot>
                     </View>
@@ -1509,6 +1618,24 @@ export default function GameHistoryScreen() {
                     >
                         <Ionicons name="share-social" size={20} color="#fff" />
                         <Text style={styles.shareBtnText}>{isSharing ? 'Generating...' : 'Share Box Score to Socials'}</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        style={[styles.shareBtn, { backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border }]}
+                        onPress={handleExportCsv}
+                        activeOpacity={0.7}
+                    >
+                        <Ionicons name="document-text-outline" size={20} color={colors.primary} />
+                        <Text style={[styles.shareBtnText, { color: colors.primary }]}>Copy CSV Export</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        style={[styles.shareBtn, { backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border }]}
+                        onPress={handleReportMatch}
+                        activeOpacity={0.7}
+                    >
+                        <Ionicons name="flag-outline" size={20} color={colors.error} />
+                        <Text style={[styles.shareBtnText, { color: colors.error }]}>Report Match Content</Text>
                     </TouchableOpacity>
 
                     {/* MVP SPLASH BANNER */}
@@ -1629,6 +1756,8 @@ export default function GameHistoryScreen() {
                                 <Text style={styles.tableCol}>A</Text>
                                 <Text style={styles.tableCol}>D</Text>
                                 {game.advancedTracking && <Text style={styles.tableCol}>P</Text>}
+                                <Text style={styles.tableCol}>PP</Text>
+                                <Text style={styles.tableCol}>+/-</Text>
                                 <Text style={styles.tableCol}>TA</Text>
                             </View>
                             {sortedMVP.map(p => (
@@ -1638,6 +1767,8 @@ export default function GameHistoryScreen() {
                                     <Text style={styles.tableCell}>{p.assists}</Text>
                                     <Text style={styles.tableCell}>{p.blocks}</Text>
                                     {game.advancedTracking && <Text style={styles.tableCell}>{p.passes}</Text>}
+                                    <Text style={styles.tableCell}>{p.pointsPlayed || 0}</Text>
+                                    <Text style={[styles.tableCell, { color: (p.pointDiff || 0) >= 0 ? colors.success : colors.error }]}>{p.pointDiff || 0}</Text>
                                     <Text style={styles.tableCell}>{p.turns}</Text>
                                 </TouchableOpacity>
                             ))}
@@ -1808,14 +1939,14 @@ export default function GameHistoryScreen() {
                                 <Text style={styles.statPillValue}>{game.isGameActive ? `${currentWinProbPct}%` : finalResultLabel}</Text>
                             </View>
                         </View>
-                        {biggestPositiveSwing && (
+                        {positiveSwing && (
                             <Text style={{ ...getTypography(colors).bodySmall, marginBottom: 4 }}>
-                                Biggest positive swing: {biggestPositiveSwing.swingPct > 0 ? '+' : ''}{biggestPositiveSwing.swingPct}% ({biggestPositiveSwing.score})
+                                Biggest positive swing: {positiveSwing.swingPct > 0 ? '+' : ''}{positiveSwing.swingPct}% ({positiveSwing.score})
                             </Text>
                         )}
-                        {biggestNegativeSwing && (
+                        {negativeSwing && (
                             <Text style={{ ...getTypography(colors).bodySmall }}>
-                                Biggest negative swing: {biggestNegativeSwing.swingPct}% ({biggestNegativeSwing.score})
+                                Biggest negative swing: {negativeSwing.swingPct}% ({negativeSwing.score})
                             </Text>
                         )}
                     </View>
@@ -2001,7 +2132,7 @@ export default function GameHistoryScreen() {
                                     colors={colors} 
                                     ourTeamName={team.name} 
                                     oppTeamName={opponentName} 
-                                    players={team.players}
+                                    players={{ ...(team.players || {}), ...(game.opponentRosterSnapshot || {}) }}
                                 />
                             </>
                         )}

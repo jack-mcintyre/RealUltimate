@@ -1,13 +1,16 @@
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFocusEffect } from '@react-navigation/native';
 import { router } from 'expo-router';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Image, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { auth } from '../../firebaseConfig';
+import TactilePressable from '../components/TactilePressable';
 import { GameService } from '../services/GameService';
 import { sanitizeAvailability, validateScheduledGameDraft } from '../services/scheduleValidation';
 import { TeamService } from '../services/TeamService';
-import { GameState, ScheduledAvailabilityStatus, ScheduledGame, Team } from '../services/types';
+import { GameEvent, GameState, ScheduledAvailabilityStatus, ScheduledGame, Team } from '../services/types';
 import { getTypography, Layout } from '../theme/DesignSystem';
 import { ThemeColors, useTheme } from '../theme/ThemeContext';
 
@@ -18,6 +21,62 @@ const dedupeTeams = (teams: Team[]): Team[] => {
         map.set(team.id, team);
     });
     return Array.from(map.values());
+};
+
+/** Which side scored — do not infer Opponent Score from `event.teamId` alone (often logs as our possession snapshot). */
+const getScoringTeamIdForCue = (game: GameState, event: GameEvent): string | null => {
+    if (!game.team1Id) return null;
+    switch (event.type) {
+        case 'Callahan_US':
+            return game.team1Id;
+        case 'Callahan_THEM':
+            return game.team2Id ?? null;
+        case 'Goal':
+        case 'G':
+            return event.teamId || null;
+        case 'Opponent Score':
+            return game.team2Id ?? null;
+        default:
+            return null;
+    }
+};
+
+const scoringEventTypes: GameEvent['type'][] = ['Goal', 'G', 'Opponent Score', 'Callahan_US', 'Callahan_THEM'];
+
+const getLiveStreakCue = (game?: GameState) => {
+    if (!game?.history?.length) return null;
+    const sorted = [...game.history].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+    const ids = sorted
+        .filter((e) => scoringEventTypes.includes(e.type))
+        .map((e) => getScoringTeamIdForCue(game, e))
+        .filter(Boolean) as string[];
+    if (ids.length < 3) return null;
+    const lastTeam = ids[ids.length - 1];
+    let streak = 1;
+    for (let i = ids.length - 2; i >= 0 && ids[i] === lastTeam; i--) {
+        streak += 1;
+    }
+    return streak >= 3 ? { teamId: lastTeam, streak } : null;
+};
+
+const getLastScoringLabel = (game: GameState | undefined, team1Name: string, team2Name: string) => {
+    if (!game?.history?.length) return null;
+    const sorted = [...game.history].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+    for (let i = sorted.length - 1; i >= 0; i--) {
+        const e = sorted[i];
+        if (!scoringEventTypes.includes(e.type)) continue;
+        const sid = getScoringTeamIdForCue(game, e);
+        if (!sid) continue;
+        const label = sid === game.team1Id ? team1Name : team2Name;
+        return `Last goal · ${label}`;
+    }
+    return null;
+};
+
+const resolveTeamAvatarUrl = (teamId: string | undefined, coached: Team[], spectated: Team[], directory: Team[]) => {
+    if (!teamId) return undefined;
+    const merged = dedupeTeams([...coached, ...spectated, ...directory]);
+    return merged.find((x) => x.id === teamId)?.pageConfig?.branding?.avatarUrl;
 };
 
 export default function TeamsHubScreen() {
@@ -49,6 +108,7 @@ export default function TeamsHubScreen() {
     const [scheduleFormError, setScheduleFormError] = useState('');
     const [isSavingSchedule, setIsSavingSchedule] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
+    const [showLaunchGuide, setShowLaunchGuide] = useState(false);
 
     const { isDark, colors } = useTheme();
     const styles = getStyles(colors);
@@ -82,6 +142,12 @@ export default function TeamsHubScreen() {
 
     useEffect(() => {
         if (!user) return;
+        AsyncStorage.getItem('realultimate.launchGuideSeen.v1')
+            .then((value) => {
+                if (value !== 'true') setShowLaunchGuide(true);
+            })
+            .catch(() => setShowLaunchGuide(true));
+
         const unsubscribe = TeamService.getTeamsForUser(user.uid, (coached, spectated) => {
             setCoachedTeams(coached);
             setSpectatedTeams(spectated);
@@ -141,36 +207,66 @@ export default function TeamsHubScreen() {
         }
     }, [coachedTeams, scheduleTeamId]);
 
-    // Fetch Live Games Details to get Opponent Names
+    // Subscribe to active games so hub cards update as soon as the recorder writes.
     useEffect(() => {
-        const fetchLiveGames = async () => {
-            const allTeams = [...coachedTeams, ...spectatedTeams];
-            const liveTeams = allTeams.filter(t => t.activeGameId);
-            const newDetails: Record<string, GameState> = {};
+        const allTeams = [...coachedTeams, ...spectatedTeams];
+        const activeGameIds = Array.from(new Set(
+            allTeams
+                .map((team) => team.activeGameId)
+                .filter((id): id is string => !!id)
+        ));
 
-            const idsToFetch = Array.from(new Set(
-                liveTeams
-                    .map((team) => team.activeGameId)
-                    .filter((id): id is string => !!id)
-            ));
-
-            const fetchedGames = await Promise.all(
-                idsToFetch.map(async (id) => ({ id, game: await GameService.getGameById(id) }))
-            );
-
-            fetchedGames.forEach(({ id, game }) => {
-                if (game) newDetails[id] = game;
-            });
-
-            if (Object.keys(newDetails).length > 0) {
-                setLiveGameDetails(prev => ({ ...prev, ...newDetails }));
-            }
-        };
-
-        if (coachedTeams.length > 0 || spectatedTeams.length > 0) {
-            fetchLiveGames();
+        if (activeGameIds.length === 0) {
+            setLiveGameDetails({});
+            return;
         }
-    }, [coachedTeams, spectatedTeams]); // only triggers when rosters update
+
+        setLiveGameDetails((prev) => Object.fromEntries(
+            Object.entries(prev).filter(([gameId]) => activeGameIds.includes(gameId))
+        ));
+
+        const unsubscribers = activeGameIds.map((gameId) =>
+            GameService.subscribeToGame(gameId, (game) => {
+                setLiveGameDetails((prev) => {
+                    if (!game || game.isGameActive === false) {
+                        const next = { ...prev };
+                        delete next[gameId];
+                        return next;
+                    }
+                    return { ...prev, [gameId]: game };
+                });
+            })
+        );
+
+        return () => {
+            unsubscribers.forEach((unsubscribe) => unsubscribe());
+        };
+    }, [coachedTeams, spectatedTeams]);
+
+    const hydrateLiveGames = useCallback(() => {
+        const allTeams = [...coachedTeams, ...spectatedTeams];
+        const ids = Array.from(
+            new Set(allTeams.map((team) => team.activeGameId).filter((gid): gid is string => !!gid)),
+        );
+        if (ids.length === 0) return;
+        void Promise.all(ids.map((gameId) => GameService.getGameById(gameId))).then((games) => {
+            setLiveGameDetails((prev) => {
+                const next = { ...prev };
+                ids.forEach((gameId, idx) => {
+                    const g = games[idx];
+                    if (g && g.isGameActive !== false) next[gameId] = { ...g, gameId };
+                    else delete next[gameId];
+                });
+                return next;
+            });
+        });
+    }, [coachedTeams, spectatedTeams]);
+
+    useFocusEffect(
+        useCallback(() => {
+            hydrateLiveGames();
+        }, [hydrateLiveGames]),
+    );
 
     // Fetch Global Past Games
     useEffect(() => {
@@ -183,7 +279,8 @@ export default function TeamsHubScreen() {
             const results = await Promise.all(gamesPromises);
             
             const allGames = results.flat();
-            const uniqueGames = Array.from(new Map(allGames.map(g => [g.gameId, g])).values());
+            const uniqueGames = Array.from(new Map(allGames.map(g => [g.gameId, g])).values())
+                .filter((game) => game.isGameActive === false);
             
             uniqueGames.sort((a, b) => {
                 const timeA = a.history && a.history.length > 0 ? a.history[a.history.length - 1].timestamp : 0;
@@ -361,8 +458,28 @@ export default function TeamsHubScreen() {
         setScheduleAvailability((prev) => ({ ...prev, [playerId]: status }));
     };
 
+    const dismissLaunchGuide = async () => {
+        setShowLaunchGuide(false);
+        await AsyncStorage.setItem('realultimate.launchGuideSeen.v1', 'true').catch(() => {});
+    };
+
     return (
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.container}>
+            <Modal visible={showLaunchGuide} animationType="fade" transparent onRequestClose={dismissLaunchGuide}>
+                <View style={styles.modalOverlay}>
+                    <View style={styles.launchGuideCard}>
+                        <Text style={styles.launchGuideKicker}>START HERE</Text>
+                        <Text style={styles.launchGuideTitle}>Build your sideline in three moves.</Text>
+                        <Text style={styles.launchGuideStep}>1. Create a team or join with a coach code.</Text>
+                        <Text style={styles.launchGuideStep}>2. Paste your roster, then tag O-line/D-line and positions.</Text>
+                        <Text style={styles.launchGuideStep}>3. Start a game, load a line preset, and share the match card after the final point.</Text>
+                        <TouchableOpacity style={styles.launchGuideBtn} onPress={dismissLaunchGuide} activeOpacity={0.85}>
+                            <Text style={styles.launchGuideBtnText}>Got it</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </Modal>
+
             {/* COMPONENT HEADER */}
             <View style={styles.topAppBar}>
                 <View style={styles.logoRow}>
@@ -467,57 +584,100 @@ export default function TeamsHubScreen() {
                                 return (
                                     <View style={styles.sectionContainer}>
                                         <View style={styles.sectionHeader}>
-                                            <Ionicons name="radio" size={18} color={colors.error} style={{ marginRight: 8 }} />
-                                            <Text style={styles.sectionTitle}>ACTIVE MATCHES</Text>
+                                            <Ionicons name="radio" size={18} color={colors.live} style={{ marginRight: 8 }} />
+                                            <Text style={[styles.sectionTitle, { color: colors.live }]}>LIVE ON YOUR TEAMS</Text>
                                         </View>
 
-                                        {liveTeams.map(t => {
-                                            const isCoach = coachedTeams.some(ct => ct.id === t.id);
-                                            const game = liveGameDetails[t.activeGameId!];
-                                            
-                                            // Format "MyTeam vs Opponent"
-                                            const matchLabel = (() => {
-                                                if (!game) return `${t.name} (Live)`;
-                                                const isTeam1 = game.team1Id === t.id;
-                                                const oppName = isTeam1 ? (game.team2Name || "Opponent") : (game.team1Id ? "Opponent" : t.name);
-                                                return `${t.name} vs ${oppName}`;
-                                            })();
+                                        <ScrollView
+                                            horizontal
+                                            showsHorizontalScrollIndicator={false}
+                                            contentContainerStyle={styles.liveCardsRail}
+                                        >
+                                            {liveTeams.map(t => {
+                                                const isCoach = coachedTeams.some(ct => ct.id === t.id);
+                                                const game = liveGameDetails[t.activeGameId!];
+                                                const isTeam1 = game?.team1Id === t.id;
+                                                const team1Name = isTeam1 ? t.name : (game?.team1Id ? 'Opponent' : t.name);
+                                                const team2Name = isTeam1 ? (game?.team2Name || 'Opponent') : t.name;
+                                                const scoreDisplay = game ? { s1: game.score1 ?? 0, s2: game.score2 ?? 0 } : null;
+                                                const streakCue = getLiveStreakCue(game);
+                                                const streakTeamName = streakCue?.teamId === game?.team1Id ? team1Name : team2Name;
+                                                const lastGoalLine = getLastScoringLabel(game, team1Name, team2Name);
+                                                const avatarUrl1 = resolveTeamAvatarUrl(game?.team1Id, coachedTeams, spectatedTeams, teamDirectory);
+                                                const avatarUrl2 = resolveTeamAvatarUrl(game?.team2Id, coachedTeams, spectatedTeams, teamDirectory);
+                                                const streakLabel = streakCue
+                                                    ? streakCue.streak >= 5
+                                                        ? `${streakTeamName} — ${streakCue.streak} straight! Unstoppable.`
+                                                        : `${streakTeamName} is on fire — ${streakCue.streak} goals in a row!`
+                                                    : null;
 
-                                            const scoreDisplay = (() => {
-                                                if (!game) return null;
-                                                return { s1: game.score1 ?? 0, s2: game.score2 ?? 0 };
-                                            })();
-
-                                            return (
-                                                <TouchableOpacity 
-                                                    key={`live-${t.id}`} 
-                                                    style={styles.liveMatchCard}
-                                                    activeOpacity={0.8}
-                                                    onPress={() => {
-                                                        if (isCoach) router.push(`/game/record/${t.id}` as any);
-                                                        else router.push(`/game/watch/${t.id}` as any);
-                                                    }}
-                                                >
-                                                    <View style={styles.liveMatchContent}>
-                                                        <View style={{ flex: 1, paddingRight: 10 }}>
+                                                return (
+                                                    <TactilePressable
+                                                        key={`live-${t.id}`}
+                                                        style={styles.liveMatchCard}
+                                                        haptic="medium"
+                                                        onPress={() => {
+                                                            if (isCoach) router.push(`/game/record/${t.id}` as any);
+                                                            else router.push(`/game/watch/${t.id}` as any);
+                                                        }}
+                                                    >
+                                                        <View style={styles.liveMatchTopRow}>
                                                             <View style={styles.liveStatusBadge}>
                                                                 <View style={styles.liveDot} />
-                                                                <Text style={styles.liveStatusText}>{isCoach ? 'BROADCASTING' : 'LIVE FEED'}</Text>
+                                                                <Text style={styles.liveStatusText}>LIVE</Text>
                                                             </View>
-                                                            <Text style={styles.cardTitle} numberOfLines={1}>{matchLabel}</Text>
-                                                        </View>
-                                                        {scoreDisplay && (
-                                                            <View style={{ backgroundColor: colors.error, paddingVertical: 6, paddingHorizontal: 14, borderRadius: 10, marginRight: 10, alignItems: 'center' }}>
-                                                                <Text style={{ fontSize: 20, fontWeight: '900', color: '#FFF', letterSpacing: 1 }}>{scoreDisplay.s1} – {scoreDisplay.s2}</Text>
+                                                            <View style={styles.playIconContainer}>
+                                                                <Ionicons name="play" size={17} color={colors.onLive} />
                                                             </View>
-                                                        )}
-                                                        <View style={styles.playIconContainer}>
-                                                            <Ionicons name="play" size={20} color={colors.onPrimary} />
                                                         </View>
-                                                    </View>
-                                                </TouchableOpacity>
-                                            );
-                                        })}
+
+                                                        <View style={styles.liveTeamsBlock}>
+                                                            <View style={styles.liveTeamScoreRow}>
+                                                                <View style={styles.liveTeamNameWithAvatar}>
+                                                                    {avatarUrl1 ? (
+                                                                        <Image source={{ uri: avatarUrl1 }} style={styles.liveTeamAvatar} />
+                                                                    ) : null}
+                                                                    <Text
+                                                                        style={[styles.liveTeamName, scoreDisplay && scoreDisplay.s1 >= scoreDisplay.s2 && styles.liveTeamNameLeading]}
+                                                                        numberOfLines={1}
+                                                                    >
+                                                                        {team1Name}
+                                                                    </Text>
+                                                                </View>
+                                                                <Text style={[styles.liveScoreNumber, scoreDisplay && scoreDisplay.s1 >= scoreDisplay.s2 && styles.liveScoreNumberLeading]}>{scoreDisplay?.s1 ?? '-'}</Text>
+                                                            </View>
+                                                            <View style={styles.liveTeamScoreRow}>
+                                                                <View style={styles.liveTeamNameWithAvatar}>
+                                                                    {avatarUrl2 ? (
+                                                                        <Image source={{ uri: avatarUrl2 }} style={styles.liveTeamAvatar} />
+                                                                    ) : null}
+                                                                    <Text
+                                                                        style={[styles.liveTeamName, scoreDisplay && scoreDisplay.s2 >= scoreDisplay.s1 && styles.liveTeamNameLeading]}
+                                                                        numberOfLines={1}
+                                                                    >
+                                                                        {team2Name}
+                                                                    </Text>
+                                                                </View>
+                                                                <Text style={[styles.liveScoreNumber, scoreDisplay && scoreDisplay.s2 >= scoreDisplay.s1 && styles.liveScoreNumberLeading]}>{scoreDisplay?.s2 ?? '-'}</Text>
+                                                            </View>
+                                                        </View>
+
+                                                        {streakLabel ? (
+                                                            <View style={styles.liveStreakBadge}>
+                                                                <Ionicons name="flame" size={14} color={colors.onLive} />
+                                                                <Text style={styles.liveStreakText} numberOfLines={2}>
+                                                                    {streakLabel}
+                                                                </Text>
+                                                            </View>
+                                                        ) : null}
+
+                                                        {lastGoalLine ? (
+                                                            <Text style={styles.liveLastGoalText} numberOfLines={1}>{lastGoalLine}</Text>
+                                                        ) : null}
+                                                    </TactilePressable>
+                                                );
+                                            })}
+                                        </ScrollView>
                                     </View>
                                 );
                             }
@@ -706,10 +866,39 @@ export default function TeamsHubScreen() {
                                         : "Unknown Date";
                                     const isWin = ourScore > theirScore;
                                     const isLoss = theirScore > ourScore;
-                                    const bgColor = isWin ? colors.success : (isLoss ? colors.error : colors.surfaceSecondary);
-                                    const textColor = (isWin || isLoss) ? colors.onPrimary : colors.text;
-                                    const subTextColor = (isWin || isLoss) ? 'rgba(255,255,255,0.8)' : colors.textSecondary;
-                                    const scoreBoxBg = (isWin || isLoss) ? 'rgba(0,0,0,0.15)' : (isDark ? 'rgba(255,255,255,0.05)' : colors.surface);
+                                    const isTie = ourScore === theirScore;
+                                    const bgColor = isWin
+                                        ? colors.success
+                                        : isLoss
+                                          ? colors.error
+                                          : isTie
+                                            ? isDark
+                                              ? 'rgba(245, 158, 11, 0.22)'
+                                              : '#FEF3C7'
+                                            : colors.surfaceSecondary;
+                                    const textColor = (isWin || isLoss)
+                                        ? colors.onPrimary
+                                        : isTie
+                                          ? isDark
+                                            ? '#FDE68A'
+                                            : '#78350F'
+                                          : colors.text;
+                                    const subTextColor = (isWin || isLoss)
+                                        ? 'rgba(255,255,255,0.8)'
+                                        : isTie
+                                          ? isDark
+                                            ? 'rgba(253, 230, 138, 0.85)'
+                                            : '#92400E'
+                                          : colors.textSecondary;
+                                    const scoreBoxBg = (isWin || isLoss)
+                                        ? 'rgba(0,0,0,0.15)'
+                                        : isTie
+                                          ? isDark
+                                            ? 'rgba(0,0,0,0.25)'
+                                            : 'rgba(146, 64, 14, 0.12)'
+                                          : isDark
+                                            ? 'rgba(255,255,255,0.05)'
+                                            : colors.surface;
 
                                     return (
                                         <TouchableOpacity 
@@ -735,24 +924,54 @@ export default function TeamsHubScreen() {
 
                         {/* Action Grid (Moved Down) */}
                         <View style={styles.actionGrid}>
-                            <TouchableOpacity style={styles.actionGridItem} onPress={() => setTeamMode('create')} activeOpacity={0.8}>
+                            <TactilePressable style={styles.actionGridItem} haptic="light" onPress={() => setTeamMode('create')}>
                                 <View style={styles.actionGridIconBox}>
                                     <Ionicons name="add" size={24} color={colors.primary} />
                                 </View>
-                                <Text style={styles.actionGridText}>Create Team</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.actionGridItem} onPress={() => setTeamMode('join')} activeOpacity={0.8}>
+                                <Text style={styles.actionGridTitle}>Create Team</Text>
+                                <Text style={styles.actionGridSub}>Start a new roster</Text>
+                            </TactilePressable>
+                            <TactilePressable style={styles.actionGridItem} haptic="light" onPress={() => setTeamMode('join')}>
                                 <View style={[styles.actionGridIconBox, { backgroundColor: colors.surfaceSecondary }]}>
                                     <Ionicons name="scan" size={24} color={colors.text} />
                                 </View>
-                                <Text style={styles.actionGridText}>Join Team</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.actionGridItem} onPress={openScheduleModal} activeOpacity={0.8}>
+                                <Text style={styles.actionGridTitle}>Join Team</Text>
+                                <Text style={styles.actionGridSub}>Code or search</Text>
+                            </TactilePressable>
+                            <TactilePressable style={styles.actionGridItem} haptic="light" onPress={openScheduleModal}>
                                 <View style={[styles.actionGridIconBox, { backgroundColor: colors.primaryLight }]}>
                                     <Ionicons name="calendar" size={24} color={colors.primary} />
                                 </View>
-                                <Text style={styles.actionGridText}>Schedule Game</Text>
-                            </TouchableOpacity>
+                                <Text style={styles.actionGridTitle}>Schedule Game</Text>
+                                <Text style={styles.actionGridSub}>Calendar entry</Text>
+                            </TactilePressable>
+                        </View>
+
+                        <View style={styles.playWithoutAccountSection}>
+                            <Text style={styles.playWithoutAccountTitle}>Practice & neutral scoring</Text>
+                            <Text style={styles.playWithoutAccountSub}>
+                                Run a local scrimmage with no login, or record two registered teams without coach access.
+                            </Text>
+                            <View style={styles.playWithoutAccountRow}>
+                                <TouchableOpacity
+                                    style={[styles.playWithoutCard, { borderColor: colors.border, backgroundColor: colors.surface }]}
+                                    onPress={() => router.push('/demo')}
+                                    activeOpacity={0.88}
+                                >
+                                    <Ionicons name="flash-outline" size={22} color={colors.primary} />
+                                    <Text style={styles.playWithoutCardTitle}>Offline quick match</Text>
+                                    <Text style={styles.playWithoutCardSub}>Local demo roster · no cloud account needed</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[styles.playWithoutCard, { borderColor: colors.border, backgroundColor: colors.surface }]}
+                                    onPress={() => router.push('/game/observer-start' as any)}
+                                    activeOpacity={0.88}
+                                >
+                                    <Ionicons name="people-outline" size={22} color={colors.primary} />
+                                    <Text style={styles.playWithoutCardTitle}>Neutral scorer</Text>
+                                    <Text style={styles.playWithoutCardSub}>Two observer codes · teams accept later</Text>
+                                </TouchableOpacity>
+                            </View>
                         </View>
 
                     </View>
@@ -989,19 +1208,104 @@ const getStyles = (colors: ThemeColors) => {
         sectionHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
         sectionTitle: { ...Typography.label },
 
-        // Live Cards
-        liveMatchCard: { backgroundColor: colors.surface, borderRadius: Layout.radiusLg, padding: 16, borderWidth: 1, borderColor: colors.error, marginBottom: 12, ...Layout.shadow },
-        liveMatchContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-        liveStatusBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.errorBg, alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 4, borderRadius: Layout.radiusSm, marginBottom: 8 },
-        liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.error, marginRight: 6 },
-        liveStatusText: { ...Typography.label, color: colors.error, fontSize: 10 },
-        playIconContainer: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.error, alignItems: 'center', justifyContent: 'center', paddingLeft: 4 },
+        // Live Cards — darker red emphasis. Uses the semantic `live*` palette
+        // from DesignSystem so light/dark switch keeps WCAG-AA on the score pill.
+        liveCardsRail: { gap: 12, paddingRight: 20, paddingBottom: 4 },
+        liveMatchCard: {
+            backgroundColor: colors.surface,
+            borderRadius: Layout.radiusLg,
+            padding: 12,
+            borderWidth: 1,
+            borderColor: colors.liveBorder,
+            width: 272,
+            minHeight: 142,
+            ...Layout.shadow,
+        },
+        liveMatchTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+        liveStatusBadge: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            backgroundColor: colors.live,
+            alignSelf: 'flex-start',
+            paddingHorizontal: 10,
+            paddingVertical: 5,
+            borderRadius: Layout.radiusSm,
+        },
+        liveDot: {
+            width: 6,
+            height: 6,
+            borderRadius: 3,
+            backgroundColor: colors.onLive,
+            marginRight: 6,
+        },
+        liveStatusText: { ...Typography.label, color: colors.onLive, fontSize: 10 },
+        liveTeamsBlock: { gap: 6 },
+        liveTeamScoreRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+        liveTeamNameWithAvatar: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 },
+        liveTeamAvatar: { width: 24, height: 24, borderRadius: 12, backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border },
+        liveTeamName: { ...Typography.body, flex: 1, minWidth: 0, color: colors.textSecondary, fontWeight: '800' },
+        liveTeamNameLeading: { color: colors.text },
+        liveScoreNumber: { fontSize: 30, lineHeight: 32, fontWeight: '900', color: colors.textSecondary, fontVariant: ['tabular-nums'] },
+        liveScoreNumberLeading: { color: colors.liveStrong },
+        liveStreakBadge: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            alignSelf: 'flex-start',
+            gap: 6,
+            marginTop: 8,
+            paddingHorizontal: 8,
+            paddingVertical: 6,
+            borderRadius: Layout.radiusSm,
+            backgroundColor: colors.liveStrong,
+            maxWidth: '100%',
+        },
+        liveStreakText: { ...Typography.label, color: colors.onLive, fontSize: 10, flexShrink: 1 },
+        liveLastGoalText: { ...Typography.bodySmall, color: colors.textSecondary, fontWeight: '700', marginTop: 8, letterSpacing: 0.15 },
+        playIconContainer: {
+            width: 32,
+            height: 32,
+            borderRadius: 16,
+            backgroundColor: colors.live,
+            alignItems: 'center',
+            justifyContent: 'center',
+            paddingLeft: 3,
+        },
+
+        playWithoutAccountSection: { marginTop: 12, marginBottom: 48 },
+        playWithoutAccountTitle: { ...Typography.title, fontSize: 20, marginBottom: 6 },
+        playWithoutAccountSub: { ...Typography.bodySmall, color: colors.textSecondary, lineHeight: 20, marginBottom: 14 },
+        playWithoutAccountRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 14 },
+        playWithoutCard: {
+            flex: 1,
+            minWidth: 160,
+            borderWidth: 1,
+            borderRadius: Layout.radiusLg,
+            padding: 16,
+            gap: 6,
+            ...Layout.shadow,
+        },
+        playWithoutCardTitle: { ...Typography.body, fontWeight: '800', marginTop: 6 },
+        playWithoutCardSub: { ...Typography.bodySmall, color: colors.textSecondary, lineHeight: 18 },
 
         // Action Grid
-        actionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 16, marginBottom: 32 },
-        actionGridItem: { width: '30%', minWidth: 120, backgroundColor: colors.surface, padding: 20, borderRadius: Layout.radiusLg, borderWidth: 1, borderColor: colors.border, ...Layout.shadow },
-        actionGridIconBox: { width: 48, height: 48, borderRadius: Layout.radiusSm, backgroundColor: colors.primaryLight, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
-        actionGridText: { ...Typography.body, fontWeight: '600' },
+        actionGrid: { flexDirection: 'row', flexWrap: 'nowrap', gap: 12, marginBottom: 32 },
+        actionGridItem: {
+            flex: 1,
+            minWidth: 0,
+            minHeight: 132,
+            backgroundColor: colors.surface,
+            paddingVertical: 16,
+            paddingHorizontal: 8,
+            borderRadius: Layout.radiusLg,
+            borderWidth: 1,
+            borderColor: colors.border,
+            alignItems: 'center',
+            justifyContent: 'flex-start',
+            ...Layout.shadow,
+        },
+        actionGridIconBox: { width: 48, height: 48, borderRadius: Layout.radiusSm, backgroundColor: colors.primaryLight, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
+        actionGridTitle: { ...Typography.body, fontWeight: '800', fontSize: 14, textAlign: 'center', lineHeight: 18 },
+        actionGridSub: { ...Typography.caption, color: colors.textSecondary, textAlign: 'center', marginTop: 4, lineHeight: 16, minHeight: 32 },
 
         // Scheduled cards
         scheduledCard: {
@@ -1065,6 +1369,12 @@ const getStyles = (colors: ThemeColors) => {
             alignItems: 'center',
             padding: 16,
         },
+        launchGuideCard: { width: '100%', maxWidth: 420, backgroundColor: colors.surface, borderRadius: Layout.radiusXl, padding: 24, borderWidth: 1, borderColor: colors.primary, ...Layout.shadow },
+        launchGuideKicker: { ...Typography.label, color: colors.primary, marginBottom: 8, letterSpacing: 2 },
+        launchGuideTitle: { ...Typography.title, fontSize: 24, lineHeight: 28, marginBottom: 14 },
+        launchGuideStep: { ...Typography.body, color: colors.textSecondary, lineHeight: 22, marginBottom: 8 },
+        launchGuideBtn: { marginTop: 12, backgroundColor: colors.primary, borderRadius: Layout.radiusMd, paddingVertical: 14, alignItems: 'center' },
+        launchGuideBtnText: { ...Typography.button, color: colors.onPrimary },
         scheduleModalCard: {
             width: '100%',
             maxWidth: 520,
