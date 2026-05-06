@@ -4,14 +4,16 @@ import { router } from 'expo-router';
 import { signOut, updatePassword, updateProfile } from 'firebase/auth';
 import { onValue, ref, update } from 'firebase/database';
 import React, { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Linking, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { auth, db } from '../../firebaseConfig';
 import ImageCropperModal from '../../src/components/ImageCropperModal';
 import DemoPresentationMenuModal from '../components/DemoPresentationMenuModal';
 import DemoWalkthroughModal from '../components/DemoWalkthroughModal';
+import TabSceneShell from '../components/TabSceneShell';
 import { AccountService } from '../services/AccountService';
 import { resolveDemoTourTeamIds } from '../services/demoTourTeamIds';
 import { DemoModeService } from '../services/DemoModeService';
+import { FeedbackService } from '../services/FeedbackService';
 import { ensureHttps, isHttpUrl, isVerifiedSocialLink, validateSocialExternalUrl } from '../services/linkUtils';
 import { NotificationService } from '../services/NotificationService';
 import { TeamService } from '../services/TeamService';
@@ -55,6 +57,10 @@ export default function ProfileScreen() {
     const [demoTourTeams, setDemoTourTeams] = useState<{ u: string; follow: string } | null>(null);
     const [demoSeeding, setDemoSeeding] = useState(false);
     const [isRemovingDemo, setIsRemovingDemo] = useState(false);
+    const [feedbackModalVisible, setFeedbackModalVisible] = useState(false);
+    const [feedbackMessage, setFeedbackMessage] = useState('');
+    const [feedbackContactEmail, setFeedbackContactEmail] = useState('');
+    const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
     const { colors, themePref, setThemePref } = useTheme();
     const styles = getStyles(colors);
 
@@ -278,6 +284,29 @@ export default function ProfileScreen() {
         Alert.alert('Support', 'Email support@realultimate.app for help or feedback.');
     };
 
+    const openFeedbackModal = () => {
+        setFeedbackMessage('');
+        setFeedbackContactEmail((email || '').trim());
+        setFeedbackModalVisible(true);
+    };
+
+    const submitFeedback = async () => {
+        if (!user) return;
+        setFeedbackSubmitting(true);
+        try {
+            await FeedbackService.submitFeedback(feedbackMessage, {
+                contactEmail: feedbackContactEmail.trim() || undefined,
+            });
+            setFeedbackModalVisible(false);
+            setFeedbackMessage('');
+            Alert.alert('Thank you', 'Your feedback was sent. We read every submission.');
+        } catch (e: any) {
+            Alert.alert('Could not send feedback', e?.message || 'Please try again.');
+        } finally {
+            setFeedbackSubmitting(false);
+        }
+    };
+
     const resolvedTourIds = useMemo(() => resolveDemoTourTeamIds(demoTourTeams, teams), [demoTourTeams, teams]);
 
     const runDemoSeed = async (force: boolean): Promise<boolean> => {
@@ -290,8 +319,9 @@ export default function ProfileScreen() {
             setDemoPackInstalled(true);
             setDemoWalkthroughVisible(true);
             return true;
-        } catch (e: any) {
-            Alert.alert('Demo unavailable', e?.message || 'Please try again.');
+        } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : typeof e === 'string' ? e : String(e);
+            Alert.alert('Demo unavailable', msg || 'Please try again.');
             return false;
         } finally {
             setDemoSeeding(false);
@@ -342,6 +372,7 @@ export default function ProfileScreen() {
     ].filter((entry) => !!entry.url);
 
     return (
+        <TabSceneShell>
         <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
             <View style={styles.topAppBar}>
                 <Text style={styles.logoText}>Profile</Text>
@@ -527,6 +558,17 @@ export default function ProfileScreen() {
                         </View>
                         <Ionicons name="chevron-forward" size={20} color={colors.border} />
                     </TouchableOpacity>
+
+                    {!!user && (
+                        <TouchableOpacity style={styles.optionRow} activeOpacity={0.7} onPress={openFeedbackModal}>
+                            <Ionicons name="chatbubble-ellipses-outline" size={24} color={colors.textSecondary} />
+                            <View style={{ flex: 1, marginLeft: 16 }}>
+                                <Text style={styles.optionText}>Send feedback</Text>
+                                <Text style={styles.subText}>Suggestions and bug reports.</Text>
+                            </View>
+                            <Ionicons name="chevron-forward" size={20} color={colors.border} />
+                        </TouchableOpacity>
+                    )}
 
                     <TouchableOpacity style={[styles.optionRow, { borderBottomWidth: 0 }]} activeOpacity={0.7} onPress={handleSupportPress}>
                         <Ionicons name="help-circle-outline" size={24} color={colors.textSecondary} />
@@ -775,6 +817,72 @@ export default function ProfileScreen() {
                 </View>
             </Modal>
 
+            {/* FEEDBACK MODAL */}
+            <Modal visible={feedbackModalVisible} animationType="slide" transparent onRequestClose={() => !feedbackSubmitting && setFeedbackModalVisible(false)}>
+                <KeyboardAvoidingView
+                    style={styles.modalOverlay}
+                    behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                    keyboardVerticalOffset={Platform.OS === 'ios' ? 48 : 0}
+                >
+                    <View style={[styles.modalContent, { maxHeight: '92%', paddingBottom: 16 }]}>
+                        <Text style={styles.modalTitle}>Send feedback</Text>
+                        <Text style={[styles.modalSub, { marginBottom: 14 }]}>
+                            Submissions are tied to your account (UID). Optional reply email if different from your login. Rate limits apply to keep spam down.
+                        </Text>
+
+                        <ScrollView style={{ width: '100%', maxHeight: 380 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+                            <View style={styles.inputGroup}>
+                                <Text style={styles.inputLabel}>YOUR MESSAGE ({FeedbackService.MESSAGE_MIN}–{FeedbackService.MESSAGE_MAX} CHARS)</Text>
+                                <TextInput
+                                    style={[styles.inputField, { minHeight: 160, textAlignVertical: 'top' }]}
+                                    placeholder="What would you improve? What broke?"
+                                    placeholderTextColor={colors.textSecondary}
+                                    value={feedbackMessage}
+                                    onChangeText={setFeedbackMessage}
+                                    multiline
+                                    maxLength={FeedbackService.MESSAGE_MAX + 50}
+                                    editable={!feedbackSubmitting}
+                                />
+                                <Text style={styles.linkHintText}>{feedbackMessage.trim().length} / {FeedbackService.MESSAGE_MAX}</Text>
+                            </View>
+                            <View style={styles.inputGroup}>
+                                <Text style={styles.inputLabel}>REPLY EMAIL (OPTIONAL)</Text>
+                                <TextInput
+                                    style={styles.inputField}
+                                    value={feedbackContactEmail}
+                                    onChangeText={setFeedbackContactEmail}
+                                    keyboardType="email-address"
+                                    autoCapitalize="none"
+                                    autoCorrect={false}
+                                    editable={!feedbackSubmitting}
+                                />
+                            </View>
+                        </ScrollView>
+
+                        <View style={styles.modalActionRow}>
+                            <TouchableOpacity
+                                style={[styles.modalActionBtn, styles.modalActionBtnSecondary]}
+                                disabled={feedbackSubmitting}
+                                onPress={() => setFeedbackModalVisible(false)}
+                            >
+                                <Text style={[styles.modalActionBtnText, { color: colors.textSecondary }]}>Cancel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.modalActionBtn, styles.modalActionBtnPrimary, feedbackSubmitting && { opacity: 0.75 }]}
+                                disabled={feedbackSubmitting || feedbackMessage.trim().length < FeedbackService.MESSAGE_MIN}
+                                onPress={() => void submitFeedback()}
+                            >
+                                {feedbackSubmitting ? (
+                                    <ActivityIndicator color="#fff" />
+                                ) : (
+                                    <Text style={[styles.modalActionBtnText, { color: '#fff' }]}>Submit</Text>
+                                )}
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </KeyboardAvoidingView>
+            </Modal>
+
             <ImageCropperModal
                 visible={!!cropTarget}
                 shape={cropTarget?.target === 'avatar' ? 'circle' : 'banner'}
@@ -820,6 +928,7 @@ export default function ProfileScreen() {
             </Modal>
 
         </ScrollView>
+        </TabSceneShell>
     );
 }
 

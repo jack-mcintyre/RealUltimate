@@ -139,6 +139,13 @@
         ".validate": "newData.hasChildren(['id','reporterUid','targetType','targetId','reason','status','createdAt']) && newData.child('id').val() === $reportId && newData.child('reporterUid').val() === auth.uid && newData.child('targetId').isString() && newData.child('reason').isString() && newData.child('reason').val().matches(/^.{1,120}$/) && newData.child('status').val() === 'open' && newData.child('createdAt').isNumber() && (newData.child('targetType').val() === 'game' || newData.child('targetType').val() === 'team' || newData.child('targetType').val() === 'player' || newData.child('targetType').val() === 'tournament' || newData.child('targetType').val() === 'match_room' || newData.child('targetType').val() === 'profile') && (!newData.child('details').exists() || (newData.child('details').isString() && newData.child('details').val().matches(/^.{0,1000}$/)))"
       }
     },
+    "userFeedback": {
+      "$feedbackId": {
+        ".read": "false",
+        ".write": "auth != null && !data.exists() && newData.exists() && newData.child('submitterUid').val() === auth.uid",
+        ".validate": "newData.hasChildren(['id','submitterUid','message','createdAt']) && newData.child('id').val() === $feedbackId && newData.child('submitterUid').val() === auth.uid && newData.child('message').isString() && newData.child('message').val().matches(/^[\\s\\S]{10,4000}$/) && newData.child('createdAt').isNumber() && newData.child('createdAt').val() <= now && newData.child('createdAt').val() >= now - 180000 && (!newData.child('appVersion').exists() || (newData.child('appVersion').isString() && newData.child('appVersion').val().matches(/^.{1,64}$/))) && (!newData.child('platform').exists() || (newData.child('platform').isString() && newData.child('platform').val().matches(/^.{1,24}$/))) && (!newData.child('contactEmail').exists() || (newData.child('contactEmail').isString() && newData.child('contactEmail').val().matches(/^.{0,320}$/)))"
+      }
+    },
     "userBlocks": {
       "$uid": {
         ".read": "auth != null && $uid === auth.uid",

@@ -560,6 +560,8 @@ export const TeamService = {
             await set(teamRef, null);
             // Delete from coach's coached_teams list
             await set(ref(db, `users/${team.coachId}/coached_teams/${teamId}`), null);
+            // Demo / following: same user may only spectate (e.g. Iowa State); clear that link too
+            await set(ref(db, `users/${team.coachId}/spectated_teams/${teamId}`), null);
         } catch (error) {
             console.error("Error deleting team:", error);
             throw error;

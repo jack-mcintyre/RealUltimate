@@ -21,7 +21,10 @@ export default function TabLayout() {
 
     return (
         <Tabs
+            detachInactiveScreens
             screenOptions={{
+                freezeOnBlur: true,
+                sceneStyle: { backgroundColor: 'transparent' },
                 tabBarActiveTintColor: colors.primary,
                 tabBarInactiveTintColor: colors.textSecondary,
                 tabBarStyle: { 

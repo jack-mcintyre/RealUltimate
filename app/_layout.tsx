@@ -1,12 +1,32 @@
+import { ThemeProvider as NavigationThemeProvider } from "@react-navigation/core";
+import { DarkTheme, DefaultTheme } from "@react-navigation/native";
 import Constants from "expo-constants";
 import { Stack, useRouter, useRootNavigationState, useSegments } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
-import React, { useEffect, useState } from "react";
-import { Linking, Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import React, { useEffect, useMemo, useState } from "react";
+import { ImageBackground, Linking, Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { auth } from "../firebaseConfig";
 import { AppConfigService } from "./services/AppConfigService";
 import { AppLaunchConfig } from "./services/types";
-import { ThemeProvider } from "./theme/ThemeContext";
+import { ThemeProvider, useTheme } from "./theme/ThemeContext";
+
+/** Override React Navigation default gray screen/chrome so root ImageBackground is visible. */
+function TransparentNavigationShell({ children }: { children: React.ReactNode }) {
+  const { isDark } = useTheme();
+  const navigationTheme = useMemo(() => {
+    const base = isDark ? DarkTheme : DefaultTheme;
+    return {
+      ...base,
+      colors: {
+        ...base.colors,
+        background: "transparent",
+        card: "transparent",
+      },
+    };
+  }, [isDark]);
+
+  return <NavigationThemeProvider value={navigationTheme}>{children}</NavigationThemeProvider>;
+}
 
 function useProtectedRoutes() {
   const segments = useSegments();
@@ -49,50 +69,59 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider>
-      <Modal visible={!!launchConfig?.maintenanceMode || upgradeRequired} transparent animationType="fade">
-        <View style={styles.gateOverlay}>
-          <View style={styles.gateCard}>
-            <Text style={styles.gateKicker}>{launchConfig?.maintenanceMode ? "MAINTENANCE" : "UPDATE REQUIRED"}</Text>
-            <Text style={styles.gateTitle}>
-              {launchConfig?.maintenanceMode ? "RealUltimate is taking a quick timeout." : "This version needs an upgrade."}
-            </Text>
-            <Text style={styles.gateCopy}>
-              {launchConfig?.maintenanceMode
-                ? launchConfig?.maintenanceMessage || "We are updating the app for launch. Please check back shortly."
-                : launchConfig?.upgradeMessage || "Install the latest version to keep live scores, tournaments, and player data working correctly."}
-            </Text>
-            {!!appStoreUrl && !launchConfig?.maintenanceMode && (
-              <TouchableOpacity style={styles.gateButton} onPress={() => Linking.openURL(appStoreUrl)} activeOpacity={0.85}>
-                <Text style={styles.gateButtonText}>Open Store</Text>
-              </TouchableOpacity>
-            )}
+      <ImageBackground
+        source={require("../assets/images/background.png")}
+        style={styles.rootBackground}
+        resizeMode="cover"
+      >
+        <Modal visible={!!launchConfig?.maintenanceMode || upgradeRequired} transparent animationType="fade">
+          <View style={styles.gateOverlay}>
+            <View style={styles.gateCard}>
+              <Text style={styles.gateKicker}>{launchConfig?.maintenanceMode ? "MAINTENANCE" : "UPDATE REQUIRED"}</Text>
+              <Text style={styles.gateTitle}>
+                {launchConfig?.maintenanceMode ? "RealUltimate is taking a quick timeout." : "This version needs an upgrade."}
+              </Text>
+              <Text style={styles.gateCopy}>
+                {launchConfig?.maintenanceMode
+                  ? launchConfig?.maintenanceMessage || "We are updating the app for launch. Please check back shortly."
+                  : launchConfig?.upgradeMessage || "Install the latest version to keep live scores, tournaments, and player data working correctly."}
+              </Text>
+              {!!appStoreUrl && !launchConfig?.maintenanceMode && (
+                <TouchableOpacity style={styles.gateButton} onPress={() => Linking.openURL(appStoreUrl)} activeOpacity={0.85}>
+                  <Text style={styles.gateButtonText}>Open Store</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
-        </View>
-      </Modal>
-      <Stack>
-        <Stack.Screen name="index" options={{ headerShown: false }} />
-        <Stack.Screen name="demo" options={{ headerShown: false }} />
-        <Stack.Screen name="forgot-password" options={{ headerShown: false }} />
-        <Stack.Screen name="legal/privacy" options={{ headerShown: false }} />
-        <Stack.Screen name="legal/terms" options={{ headerShown: false }} />
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="team/[id]" options={{ headerShown: false }} />
-        <Stack.Screen name="team/[id]/edit" options={{ headerShown: false }} />
-        <Stack.Screen name="team/[id]/manage" options={{ headerShown: false }} />
-        <Stack.Screen name="game/observer-start" options={{ headerShown: false }} />
-        <Stack.Screen name="game/join-observer" options={{ headerShown: false }} />
-        <Stack.Screen name="game/record/[teamId]" options={{ headerShown: false }} />
-        <Stack.Screen name="game/watch/[teamId]" options={{ headerShown: false }} />
-        <Stack.Screen name="game/history/[gameId]" options={{ headerShown: false }} />
-        <Stack.Screen name="game/scheduled/[teamId]/[gameId]" options={{ headerShown: false }} />
-        <Stack.Screen name="team/[teamId]/player/[playerId]" options={{ headerShown: false }} />
-        <Stack.Screen name="tournament/[id]" options={{ headerShown: false }} />
-      </Stack>
+        </Modal>
+        <TransparentNavigationShell>
+          <Stack screenOptions={{ contentStyle: { backgroundColor: "transparent" } }}>
+            <Stack.Screen name="index" options={{ headerShown: false }} />
+            <Stack.Screen name="demo" options={{ headerShown: false }} />
+            <Stack.Screen name="forgot-password" options={{ headerShown: false }} />
+            <Stack.Screen name="legal/privacy" options={{ headerShown: false }} />
+            <Stack.Screen name="legal/terms" options={{ headerShown: false }} />
+            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen name="team/[id]" options={{ headerShown: false }} />
+            <Stack.Screen name="team/[id]/edit" options={{ headerShown: false }} />
+            <Stack.Screen name="team/[id]/manage" options={{ headerShown: false }} />
+            <Stack.Screen name="game/observer-start" options={{ headerShown: false }} />
+            <Stack.Screen name="game/join-observer" options={{ headerShown: false }} />
+            <Stack.Screen name="game/record/[teamId]" options={{ headerShown: false }} />
+            <Stack.Screen name="game/watch/[teamId]" options={{ headerShown: false }} />
+            <Stack.Screen name="game/history/[gameId]" options={{ headerShown: false }} />
+            <Stack.Screen name="game/scheduled/[teamId]/[gameId]" options={{ headerShown: false }} />
+            <Stack.Screen name="team/[teamId]/player/[playerId]" options={{ headerShown: false }} />
+            <Stack.Screen name="tournament/[id]" options={{ headerShown: false }} />
+          </Stack>
+        </TransparentNavigationShell>
+      </ImageBackground>
     </ThemeProvider>
   );
 }
 
 const styles = StyleSheet.create({
+  rootBackground: { flex: 1 },
   gateOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.72)", alignItems: "center", justifyContent: "center", padding: 22 },
   gateCard: { width: "100%", maxWidth: 420, backgroundColor: "#0B1120", borderRadius: 24, padding: 24, borderWidth: 1, borderColor: "#2563EB" },
   gateKicker: { color: "#60A5FA", fontSize: 12, fontWeight: "900", letterSpacing: 2, marginBottom: 8 },

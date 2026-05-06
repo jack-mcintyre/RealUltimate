@@ -157,6 +157,17 @@ export interface SafetyReport {
   createdAt: number;
 }
 
+/** Stored under userFeedback/{id}; readable only by admins (Firebase Console / backend). */
+export interface UserFeedback {
+  id: string;
+  submitterUid: string;
+  message: string;
+  createdAt: number;
+  appVersion?: string;
+  platform?: string;
+  contactEmail?: string;
+}
+
 export interface UserBlock {
   blockedUid: string;
   createdAt: number;

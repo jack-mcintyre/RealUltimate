@@ -9,6 +9,7 @@ import { onValue, ref } from 'firebase/database';
 import { auth, db } from '../../firebaseConfig';
 import DemoPresentationMenuModal from '../components/DemoPresentationMenuModal';
 import DemoWalkthroughModal from '../components/DemoWalkthroughModal';
+import TabSceneShell from '../components/TabSceneShell';
 import TactilePressable from '../components/TactilePressable';
 import { DemoModeService } from '../services/DemoModeService';
 import { resolveDemoTourTeamIds } from '../services/demoTourTeamIds';
@@ -517,8 +518,9 @@ export default function TeamsHubScreen() {
             setDemoPackInstalled(true);
             setDemoWalkthroughVisible(true);
             return true;
-        } catch (e: any) {
-            Alert.alert('Demo unavailable', e?.message || 'Please try again.');
+        } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : typeof e === 'string' ? e : String(e);
+            Alert.alert('Demo unavailable', msg || 'Please try again.');
             return false;
         } finally {
             setDemoSeeding(false);
@@ -526,6 +528,7 @@ export default function TeamsHubScreen() {
     };
 
     return (
+        <TabSceneShell>
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.container}>
             <Modal visible={showLaunchGuide} animationType="fade" transparent onRequestClose={dismissLaunchGuide}>
                 <View style={styles.modalOverlay}>
@@ -1292,13 +1295,14 @@ export default function TeamsHubScreen() {
                 </>
             )}
         </KeyboardAvoidingView>
+        </TabSceneShell>
     );
 }
 
 const getStyles = (colors: ThemeColors) => {
     const Typography = getTypography(colors);
     return StyleSheet.create({
-        container: { flex: 1, backgroundColor: colors.background, paddingBottom: 60 },
+        container: { flex: 1, backgroundColor: colors.background },
         
         topAppBar: { height: 60, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: Layout.padding, backgroundColor: colors.surface, borderBottomWidth: 1, borderBottomColor: colors.border },
         logoRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },

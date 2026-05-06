@@ -7,7 +7,8 @@ export const LightColors = {
     primary: '#2563EB',
     primaryLight: '#DBEAFE',
     onPrimary: '#FFFFFF',
-    background: '#F3F4F6',
+    /** Transparent so root ImageBackground shows through between surfaces */
+    background: 'transparent',
     surface: '#FFFFFF',
     surfaceSecondary: '#F9FAFB',
     text: '#111827',
@@ -29,7 +30,8 @@ export const DarkColors = {
     primary: '#3B82F6', 
     primaryLight: '#1E3A8A', 
     onPrimary: '#FFFFFF',
-    background: '#050505', 
+    /** Tinted so light artwork behind root ImageBackground is not harsh in dark mode */
+    background: 'rgba(5, 5, 5, 0.72)',
     surface: '#121212', 
     surfaceSecondary: '#1C1C1E', 
     text: '#F8FAFC', 

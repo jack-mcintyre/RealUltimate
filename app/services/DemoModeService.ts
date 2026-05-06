@@ -348,6 +348,124 @@ async function clearScheduledGamesForTeam(teamId: string): Promise<void> {
     }
 }
 
+/** Exact names used by `seedDemoWorld` — catches orphaned pairs after `force` reinstalls. */
+const DEMO_PACK_TEAM_NAMES = new Set(['University of Iowa', 'Iowa State']);
+
+async function collectDemoTeamIdsForRemoval(uid: string, p: Record<string, unknown>): Promise<string[]> {
+    const ids = new Set<string>();
+    const addId = (v: unknown) => {
+        if (typeof v === 'string' && v.length > 0) ids.add(v);
+    };
+    addId(p.demoUniversityIowaTeamId);
+    addId(p.demoIowaStateTeamId);
+    addId(p.demoIowaTeamId);
+
+    const coachedSnap = await get(ref(db, `users/${uid}/coached_teams`));
+    const spectSnap = await get(ref(db, `users/${uid}/spectated_teams`));
+    const listKeys = [
+        ...(coachedSnap.exists() ? Object.keys(coachedSnap.val() as Record<string, unknown>) : []),
+        ...(spectSnap.exists() ? Object.keys(spectSnap.val() as Record<string, unknown>) : []),
+    ];
+    const uniqueKeys = [...new Set(listKeys)];
+
+    await Promise.all(
+        uniqueKeys.map(async (tid) => {
+            const ts = await get(ref(db, `teams/${tid}`));
+            if (!ts.exists()) return;
+            const tm = ts.val() as Team;
+            if (tm.coachId !== uid) return;
+            if (DEMO_PACK_TEAM_NAMES.has(tm.name)) {
+                ids.add(tid);
+            }
+        })
+    );
+
+    return [...ids];
+}
+
+/** Deletes demo games/teams/lists and clears demo profile keys. Caller decides when to throw (user-facing remove vs reseed). */
+async function executeDemoPackPurge(uid: string, profileSnapshot: Record<string, unknown>, teamIds: string[]): Promise<void> {
+    const gameIds = new Set<string>();
+    for (const tid of teamIds) {
+        const ts = await get(ref(db, `teams/${tid}`));
+        if (ts.exists()) {
+            const tm = ts.val() as Team;
+            if (typeof tm.activeGameId === 'string' && tm.activeGameId.length > 0) {
+                gameIds.add(tm.activeGameId);
+            }
+        }
+        const pg = await get(ref(db, `teams/${tid}/pastGames`));
+        if (pg.exists()) {
+            Object.keys((pg.val() as Record<string, unknown>) || {}).forEach((id) => gameIds.add(id));
+        }
+    }
+
+    for (const gid of gameIds) {
+        await removeDemoGameArtifacts(gid);
+    }
+
+    for (const tid of teamIds) {
+        await clearScheduledGamesForTeam(tid);
+        await purgeTeamJoinArtifacts(tid);
+    }
+
+    const activeTeamId = typeof profileSnapshot.activeTeamId === 'string' ? profileSnapshot.activeTeamId : null;
+    const clearActive = activeTeamId ? teamIds.includes(activeTeamId) : false;
+
+    for (const tid of teamIds) {
+        const tSnap = await get(ref(db, `teams/${tid}`));
+        if (tSnap.exists()) {
+            const team = tSnap.val() as Team;
+            if (team.coachId === uid) {
+                await TeamService.deleteTeam(tid, uid);
+            }
+        }
+        await set(ref(db, `users/${uid}/spectated_teams/${tid}`), null);
+        await set(ref(db, `users/${uid}/coached_teams/${tid}`), null);
+    }
+
+    await update(ref(db, `users/${uid}/profile`), {
+        [DEMO_PACK_KEY]: null,
+        demoUniversityIowaTeamId: null,
+        demoIowaStateTeamId: null,
+        demoIowaTeamId: null,
+        ...(clearActive ? { activeTeamId: null, activeRole: null } : {}),
+    });
+
+    for (const tid of teamIds) {
+        GameService.clearPastGamesCacheForTeam(tid);
+    }
+
+    await pruneGhostTeamListEntries(uid);
+    await clearActiveTeamIfGhost(uid);
+}
+
+/** Removes coached/spectated index entries whose team nodes no longer exist (e.g. manual Firebase deletes). */
+async function pruneGhostTeamListEntries(uid: string): Promise<void> {
+    for (const list of ['coached_teams', 'spectated_teams'] as const) {
+        const snap = await get(ref(db, `users/${uid}/${list}`));
+        if (!snap.exists()) continue;
+        const keys = Object.keys(snap.val() as Record<string, unknown>);
+        for (const tid of keys) {
+            const t = await get(ref(db, `teams/${tid}`));
+            if (!t.exists()) {
+                await set(ref(db, `users/${uid}/${list}/${tid}`), null);
+            }
+        }
+    }
+}
+
+async function clearActiveTeamIfGhost(uid: string): Promise<void> {
+    const profSnap = await get(ref(db, `users/${uid}/profile`));
+    if (!profSnap.exists()) return;
+    const aid = (profSnap.val() as Record<string, unknown>).activeTeamId;
+    if (typeof aid !== 'string' || !aid) return;
+    const t = await get(ref(db, `teams/${aid}`));
+    if (!t.exists()) {
+        await update(ref(db, `users/${uid}/profile`), { activeTeamId: null, activeRole: null });
+    }
+}
+
 export const DemoModeService = {
     DEMO_PACK_KEY,
 
@@ -369,6 +487,12 @@ export const DemoModeService = {
         const installed = await DemoModeService.isPackInstalled(uid);
         if (installed && !options?.force) {
             throw new Error('Demo sample pack is already installed for this account.');
+        }
+        if (options?.force) {
+            const profSnap = await get(ref(db, `users/${uid}/profile`));
+            const p = profSnap.exists() ? (profSnap.val() as Record<string, unknown>) : {};
+            const teamIds = await collectDemoTeamIdsForRemoval(uid, p);
+            await executeDemoPackPurge(uid, p, teamIds);
         }
 
         const universityIowaTeamId = await TeamService.createTeam('University of Iowa', uid, email, displayName);
@@ -490,62 +614,21 @@ export const DemoModeService = {
             throw new Error('Profile not found.');
         }
         const p = profSnap.val() as Record<string, unknown>;
-        if (!p[DEMO_PACK_KEY]) {
+        const demoPackLeafSnap = await get(ref(db, `users/${uid}/profile/${DEMO_PACK_KEY}`));
+        const demoPackLeafInstalled = demoPackLeafSnap.exists() && !!demoPackLeafSnap.val();
+        const hasDemoMarker =
+            demoPackLeafInstalled ||
+            !!p[DEMO_PACK_KEY] ||
+            typeof p.demoUniversityIowaTeamId === 'string' ||
+            typeof p.demoIowaStateTeamId === 'string' ||
+            typeof p.demoIowaTeamId === 'string';
+
+        const teamIds = await collectDemoTeamIdsForRemoval(uid, p);
+
+        if (!hasDemoMarker && teamIds.length === 0) {
             throw new Error('Demo sample is not installed.');
         }
-        const uIowa = typeof p.demoUniversityIowaTeamId === 'string' ? p.demoUniversityIowaTeamId : null;
-        const isu = typeof p.demoIowaStateTeamId === 'string' ? p.demoIowaStateTeamId : null;
-        const teamIds = [uIowa, isu].filter(Boolean) as string[];
 
-        const gameIds = new Set<string>();
-        for (const tid of teamIds) {
-            const ts = await get(ref(db, `teams/${tid}`));
-            if (ts.exists()) {
-                const tm = ts.val() as Team;
-                if (typeof tm.activeGameId === 'string' && tm.activeGameId.length > 0) {
-                    gameIds.add(tm.activeGameId);
-                }
-            }
-            const pg = await get(ref(db, `teams/${tid}/pastGames`));
-            if (pg.exists()) {
-                Object.keys((pg.val() as Record<string, unknown>) || {}).forEach((id) => gameIds.add(id));
-            }
-        }
-
-        for (const gid of gameIds) {
-            await removeDemoGameArtifacts(gid);
-        }
-
-        for (const tid of teamIds) {
-            await clearScheduledGamesForTeam(tid);
-            await purgeTeamJoinArtifacts(tid);
-        }
-
-        const activeTeamId = typeof p.activeTeamId === 'string' ? p.activeTeamId : null;
-        const clearActive = activeTeamId ? teamIds.includes(activeTeamId) : false;
-
-        for (const tid of teamIds) {
-            const tSnap = await get(ref(db, `teams/${tid}`));
-            if (tSnap.exists()) {
-                const team = tSnap.val() as Team;
-                if (team.coachId === uid) {
-                    await TeamService.deleteTeam(tid, uid);
-                }
-            }
-            await set(ref(db, `users/${uid}/spectated_teams/${tid}`), null);
-            await set(ref(db, `users/${uid}/coached_teams/${tid}`), null);
-        }
-
-        await update(ref(db, `users/${uid}/profile`), {
-            [DEMO_PACK_KEY]: null,
-            demoUniversityIowaTeamId: null,
-            demoIowaStateTeamId: null,
-            demoIowaTeamId: null,
-            ...(clearActive ? { activeTeamId: null, activeRole: null } : {}),
-        });
-
-        for (const tid of teamIds) {
-            GameService.clearPastGamesCacheForTeam(tid);
-        }
+        await executeDemoPackPurge(uid, p, teamIds);
     },
 };

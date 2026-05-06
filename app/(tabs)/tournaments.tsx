@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Animated, Modal, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { auth } from '../../firebaseConfig';
+import TabSceneShell from '../components/TabSceneShell';
 import { TeamService } from '../services/TeamService';
 import { TournamentDirectoryItem, TournamentService } from '../services/TournamentService';
 import { Team, Tournament, TournamentEngine, TournamentEnrollmentMode, TournamentPrivacy, TournamentSeeding } from '../services/types';
@@ -310,6 +311,7 @@ export default function TournamentsTabScreen() {
     );
 
     return (
+        <TabSceneShell>
         <View style={styles.container}>
             <View style={styles.header}>
                 <View>
@@ -553,6 +555,7 @@ export default function TournamentsTabScreen() {
                 </View>
             </Modal>
         </View>
+        </TabSceneShell>
     );
 }
 
