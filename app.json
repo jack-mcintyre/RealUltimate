@@ -9,7 +9,7 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "updates": {
-      "url": "https://u.expo.dev/502906e7-7eb5-4009-8d61-5685b724dc4f"
+      "url": "https://u.expo.dev/a46e4b84-0631-4e74-b2d6-be17569d28b8"
     },
     "runtimeVersion": {
       "policy": "appVersion"
@@ -31,9 +31,7 @@
       "allowBackup": false,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
+        "foregroundImage": "./assets/images/icontransparent.png"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
@@ -64,8 +62,19 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "502906e7-7eb5-4009-8d61-5685b724dc4f"
+        "projectId": "a46e4b84-0631-4e74-b2d6-be17569d28b8"
+      },
+      "firebase": {
+        "apiKey": "AIzaSyDkyAIfXXMRpsGbZ0idU7Out6N7rZI_93E",
+        "authDomain": "realultimate-62638.firebaseapp.com",
+        "databaseURL": "https://realultimate-62638-default-rtdb.firebaseio.com",
+        "projectId": "realultimate-62638",
+        "storageBucket": "realultimate-62638.firebasestorage.app",
+        "messagingSenderId": "926825574682",
+        "appId": "1:926825574682:web:cb000661a4bb055d35bca3",
+        "measurementId": "G-ZM7R0J2CWZ"
       }
-    }
+    },
+    "owner": "drainbow"
   }
 }

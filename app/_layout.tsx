@@ -4,6 +4,7 @@ import Constants from "expo-constants";
 import { Stack, useRouter, useRootNavigationState, useSegments } from "expo-router";
 import { onAuthStateChanged } from "firebase/auth";
 import React, { useEffect, useMemo, useState } from "react";
+import { StatusBar } from "expo-status-bar";
 import { ImageBackground, Linking, Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { auth } from "../firebaseConfig";
 import { AppConfigService } from "./services/AppConfigService";
@@ -69,6 +70,7 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider>
+      <StatusBar hidden={true} />
       <ImageBackground
         source={require("../assets/images/background.png")}
         style={styles.rootBackground}

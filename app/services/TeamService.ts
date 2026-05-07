@@ -1,4 +1,4 @@
-import { get, onValue, push, ref, set, runTransaction } from 'firebase/database';
+import { get, onValue, push, ref, set, runTransaction, query, limitToLast } from 'firebase/database';
 import { db } from '../../firebaseConfig';
 import { GameService } from './GameService';
 import { isFutureScheduledTimestamp, sanitizeAvailability, SCHEDULE_LIMITS } from './scheduleValidation';
@@ -155,8 +155,8 @@ export const TeamService = {
     searchTeams: async (queryText: string): Promise<{ id: string, name: string }[]> => {
         if (!queryText || queryText.length < 2) return [];
         const normalized = queryText.toLowerCase().trim();
-        const teamsRef = ref(db, 'teams');
-        const snapshot = await get(teamsRef);
+        const teamsQuery = query(ref(db, 'teams'), limitToLast(500));
+        const snapshot = await get(teamsQuery);
         if (!snapshot.exists()) return [];
         
         const data = snapshot.val();
@@ -174,8 +174,8 @@ export const TeamService = {
     searchPublicTeams: async (queryText: string): Promise<Team[]> => {
         if (!queryText || queryText.length < 2) return [];
         const normalized = queryText.toLowerCase().trim();
-        const teamsRef = ref(db, 'teams');
-        const snapshot = await get(teamsRef);
+        const teamsQuery = query(ref(db, 'teams'), limitToLast(500));
+        const snapshot = await get(teamsQuery);
         if (!snapshot.exists()) return [];
         
         const data = snapshot.val();
@@ -570,8 +570,8 @@ export const TeamService = {
 
     getAllTeams: async (): Promise<Team[]> => {
         try {
-            const teamsRef = ref(db, 'teams');
-            const snapshot = await get(teamsRef);
+            const teamsQuery = query(ref(db, 'teams'), limitToLast(150));
+            const snapshot = await get(teamsQuery);
             if (!snapshot.exists()) return [];
 
             const data = snapshot.val() as Record<string, Partial<Team>>;
