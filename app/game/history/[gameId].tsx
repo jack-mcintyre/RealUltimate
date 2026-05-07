@@ -15,6 +15,7 @@ import { TeamService } from '../../services/TeamService';
 import { GameState, PlayerStats, PredictionSnapshot, Team } from '../../services/types';
 import { getTypography, Layout } from '../../theme/DesignSystem';
 import { ThemeColors, useTheme } from '../../theme/ThemeContext';
+import SceneShell from '../../components/SceneShell';
 
 // Pseudo Team Logo for Scoreboard
 const TeamLogo = ({ name, isGuest }: { name: string, isGuest?: boolean }) => {
@@ -979,9 +980,11 @@ export default function GameHistoryScreen() {
 
     if (!game || !team) {
         return (
+            <SceneShell>
             <View style={styles.centerContainer}>
                 <ActivityIndicator size="large" color={colors.primary} />
             </View>
+            </SceneShell>
         );
     }
 
@@ -1430,6 +1433,7 @@ export default function GameHistoryScreen() {
     const hasPredictions = predictionSnapshots.length >= 2 && (game.predictions?.team1Votes || 0) + (game.predictions?.team2Votes || 0) >= 3;
 
     return (
+        <SceneShell>
         <View style={styles.container}>
             {/* UPGRADED WELCOME MODAL */}
             <Modal visible={showWelcomeModal} animationType="fade" transparent={true}>
@@ -2208,6 +2212,7 @@ export default function GameHistoryScreen() {
                 </View>
             </ScrollView>
         </View>
+        </SceneShell>
     );
 }
 

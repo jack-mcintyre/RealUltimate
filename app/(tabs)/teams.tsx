@@ -1417,14 +1417,13 @@ const getStyles = (colors: ThemeColors) => {
         playWithoutCardSub: { ...Typography.bodySmall, color: colors.textSecondary, lineHeight: 18 },
 
         // Action Grid
-        actionGrid: { flexDirection: 'row', flexWrap: 'nowrap', gap: 12, marginBottom: 32 },
+        actionGrid: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 32 },
         actionGridItem: {
-            flex: 1,
-            minWidth: 0,
-            minHeight: 132,
+            width: '31.5%',
+            minHeight: 120,
             backgroundColor: colors.surface,
-            paddingVertical: 16,
-            paddingHorizontal: 8,
+            paddingVertical: 12,
+            paddingHorizontal: 4,
             borderRadius: Layout.radiusLg,
             borderWidth: 1,
             borderColor: colors.border,
@@ -1432,9 +1431,9 @@ const getStyles = (colors: ThemeColors) => {
             justifyContent: 'flex-start',
             ...Layout.shadow,
         },
-        actionGridIconBox: { width: 48, height: 48, borderRadius: Layout.radiusSm, backgroundColor: colors.primaryLight, alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
-        actionGridTitle: { ...Typography.body, fontWeight: '800', fontSize: 14, textAlign: 'center', lineHeight: 18 },
-        actionGridSub: { ...Typography.caption, color: colors.textSecondary, textAlign: 'center', marginTop: 4, lineHeight: 16, minHeight: 32 },
+        actionGridIconBox: { width: 40, height: 40, borderRadius: Layout.radiusSm, backgroundColor: colors.primaryLight, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
+        actionGridTitle: { ...Typography.body, fontWeight: '800', fontSize: 12, textAlign: 'center', lineHeight: 14 },
+        actionGridSub: { ...Typography.caption, color: colors.textSecondary, fontSize: 10, textAlign: 'center', marginTop: 4, lineHeight: 12 },
 
         // Scheduled cards
         scheduledCard: {

@@ -13,6 +13,7 @@ import { TeamService } from '../../services/TeamService';
 import { GameState, Team } from '../../services/types';
 import { getTypography, Layout } from '../../theme/DesignSystem';
 import { ThemeColors, useTheme } from '../../theme/ThemeContext';
+import SceneShell from '../../components/SceneShell';
 
 const EMOJIS = ['🔥', '💪', '👏', '😱', '🥏', '⚡'];
 
@@ -786,6 +787,7 @@ export default function LiveFeedScreen() {
 
     if (team) {
         return (
+            <SceneShell>
             <View style={styles.container}>
                 <View style={styles.topAppBar}>
                     <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
@@ -1255,13 +1257,16 @@ export default function LiveFeedScreen() {
                     </View>
                 )}
             </View>
+            </SceneShell>
         );
     }
 
     return (
+        <SceneShell>
         <View style={styles.centerContainer}>
             <ActivityIndicator size="large" color={colors.primary} />
         </View>
+        </SceneShell>
     );
 }
 

@@ -5,6 +5,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { getTypography, Layout } from './theme/DesignSystem';
 import { ThemeColors, useTheme } from './theme/ThemeContext';
+import SceneShell from './components/SceneShell';
 
 type TeamKey = 'home' | 'away';
 type GameFormat = '5v5' | '7v7';
@@ -561,6 +562,7 @@ export default function DemoMatchScreen() {
   );
 
   return (
+    <SceneShell>
     <View style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.iconBtn} onPress={() => router.back()}>
@@ -573,6 +575,7 @@ export default function DemoMatchScreen() {
       </View>
       {phase === 'setup' ? renderSetup() : phase === 'record' ? renderRecord() : renderSummary()}
     </View>
+    </SceneShell>
   );
 }
 

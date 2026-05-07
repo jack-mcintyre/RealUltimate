@@ -6,6 +6,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import React, { useEffect, useMemo, useState } from "react";
 import { StatusBar } from "expo-status-bar";
 import { ImageBackground, Linking, Modal, Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { auth } from "../firebaseConfig";
 import { AppConfigService } from "./services/AppConfigService";
 import { AppLaunchConfig } from "./services/types";
@@ -13,7 +14,8 @@ import { ThemeProvider, useTheme } from "./theme/ThemeContext";
 
 /** Override React Navigation default gray screen/chrome so root ImageBackground is visible. */
 function TransparentNavigationShell({ children }: { children: React.ReactNode }) {
-  const { isDark } = useTheme();
+  const { isDark, colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const navigationTheme = useMemo(() => {
     const base = isDark ? DarkTheme : DefaultTheme;
     return {
@@ -26,7 +28,15 @@ function TransparentNavigationShell({ children }: { children: React.ReactNode })
     };
   }, [isDark]);
 
-  return <NavigationThemeProvider value={navigationTheme}>{children}</NavigationThemeProvider>;
+  return (
+    <NavigationThemeProvider value={navigationTheme}>
+      <StatusBar style={isDark ? "light" : "dark"} />
+      <View style={{ position: 'absolute', top: 0, width: '100%', height: insets.top, backgroundColor: isDark ? colors.surface : '#9CA3AF', zIndex: 9999 }} />
+      <SafeAreaView style={{ flex: 1 }} edges={['top', 'left', 'right']}>
+        {children}
+      </SafeAreaView>
+    </NavigationThemeProvider>
+  );
 }
 
 function useProtectedRoutes() {
@@ -70,7 +80,6 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider>
-      <StatusBar hidden={true} />
       <ImageBackground
         source={require("../assets/images/background.png")}
         style={styles.rootBackground}

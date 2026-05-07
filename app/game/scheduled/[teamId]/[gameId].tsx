@@ -9,6 +9,7 @@ import { TeamService } from '../../../services/TeamService';
 import { ScheduledAvailabilityStatus, ScheduledGame, Team } from '../../../services/types';
 import { getTypography, Layout } from '../../../theme/DesignSystem';
 import { ThemeColors, useTheme } from '../../../theme/ThemeContext';
+import SceneShell from '../../../components/SceneShell';
 
 export default function ScheduledGameDetailScreen() {
     const { teamId, gameId } = useLocalSearchParams<{ teamId: string; gameId: string }>();
@@ -219,6 +220,7 @@ export default function ScheduledGameDetailScreen() {
     const canDeleteScheduled = canEditScheduled;
 
     return (
+        <SceneShell>
         <View style={styles.container}>
             <View style={styles.topAppBar}>
                 <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
@@ -377,6 +379,7 @@ export default function ScheduledGameDetailScreen() {
                 </View>
             </ScrollView>
         </View>
+        </SceneShell>
     );
 }
 

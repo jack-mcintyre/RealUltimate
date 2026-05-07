@@ -9,6 +9,7 @@ import { auth, db } from '../../../firebaseConfig';
 import BrandedDialog from '../../../src/components/BrandedDialog';
 import DemoRecorderStartModal from '../../components/DemoRecorderStartModal';
 import HalftimeTimerModal from '../../components/HalftimeTimerModal';
+import SceneShell from '../../components/SceneShell';
 import { useGame } from '../../hooks/useGame';
 import { flipFieldCoord, GameService } from '../../services/GameService';
 import { ObserverRecordingScope, ObserverSessionService } from '../../services/ObserverSessionService';
@@ -1294,6 +1295,7 @@ export default function RecorderScreen() {
     const discIconColor = discBorderColor;
 
     return (
+        <SceneShell>
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.container}>
             <View style={styles.topAppBar}>
                 <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
@@ -2470,6 +2472,7 @@ export default function RecorderScreen() {
             />
 
         </KeyboardAvoidingView>
+        </SceneShell>
     );
 }
 

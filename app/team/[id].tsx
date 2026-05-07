@@ -8,6 +8,7 @@ import React, { useEffect, useState } from 'react';
 import { Alert, Image, KeyboardAvoidingView, Linking, Modal, Platform, ScrollView, Share, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { auth, db } from '../../firebaseConfig';
 import DemoTeamPageHintModal from '../components/DemoTeamPageHintModal';
+import SceneShell from '../components/SceneShell';
 import { GameService } from '../services/GameService';
 import { ensureHttps, getHostname, validateExternalUrl, validateSocialExternalUrl } from '../services/linkUtils';
 import { sanitizeAvailability, validateScheduledGameDraft } from '../services/scheduleValidation';
@@ -871,6 +872,7 @@ export default function TeamDashboardScreen() {
     const epvPositiveRate = epvSamples > 0 ? Math.round((epvPositive / epvSamples) * 100) : 0;
 
     return (
+        <SceneShell>
         <View style={styles.container}>
             <View style={styles.topAppBar}>
                 <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
@@ -1795,6 +1797,7 @@ export default function TeamDashboardScreen() {
                 onDismiss={dismissDemoTeamHint}
             />
         </View>
+        </SceneShell>
     );
 }
 

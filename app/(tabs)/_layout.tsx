@@ -3,11 +3,13 @@ import { Tabs, router } from 'expo-router';
 import { onAuthStateChanged } from 'firebase/auth';
 import { useEffect } from 'react';
 import { auth } from '../../firebaseConfig';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getTypography } from '../theme/DesignSystem';
 import { useTheme } from '../theme/ThemeContext';
 
 export default function TabLayout() {
     const { colors } = useTheme();
+    const insets = useSafeAreaInsets();
     
     // Auth Guard
     useEffect(() => {
@@ -32,8 +34,8 @@ export default function TabLayout() {
                     borderTopWidth: 1, 
                     borderTopColor: colors.border,
                     paddingTop: 4,
-                    paddingBottom: 4,
-                    height: 50,
+                    paddingBottom: insets.bottom > 0 ? insets.bottom : 8,
+                    height: 50 + (insets.bottom > 0 ? insets.bottom : 8),
                 },
                 tabBarLabelStyle: {
                     ...getTypography(colors).label,

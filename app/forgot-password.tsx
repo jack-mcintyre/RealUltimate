@@ -6,6 +6,7 @@ import { ActivityIndicator, KeyboardAvoidingView, Platform, StyleSheet, Text, Te
 import { auth } from '../firebaseConfig';
 import { getTypography, Layout } from './theme/DesignSystem';
 import { ThemeColors, useTheme } from './theme/ThemeContext';
+import SceneShell from './components/SceneShell';
 
 export default function ForgotPasswordScreen() {
     const { colors } = useTheme();
@@ -49,6 +50,7 @@ export default function ForgotPasswordScreen() {
     };
 
     return (
+        <SceneShell>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.container}>
             <View style={styles.topAppBar}>
                 <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} activeOpacity={0.8}>
@@ -91,6 +93,7 @@ export default function ForgotPasswordScreen() {
                 </TouchableOpacity>
             </View>
         </KeyboardAvoidingView>
+        </SceneShell>
     );
 }
 
