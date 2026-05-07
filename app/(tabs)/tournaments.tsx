@@ -314,7 +314,7 @@ export default function TournamentsTabScreen() {
         <TabSceneShell>
         <View style={styles.container}>
             <View style={styles.header}>
-                <View>
+                <View style={{ flex: 1, paddingRight: 10 }}>
                     <Text style={styles.headerTitle}>Tournaments</Text>
                     <Text style={styles.headerSubtitle}>Create pools, bracket play, spirit leaderboard, and consolation paths.</Text>
                 </View>
@@ -585,7 +585,6 @@ const getStyles = (colors: ThemeColors) => {
         headerSubtitle: {
             ...Typography.bodySmall,
             color: colors.textSecondary,
-            maxWidth: 245,
             marginTop: 2,
         },
         createBtn: {

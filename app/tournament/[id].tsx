@@ -7,6 +7,7 @@ import { TournamentService } from '../services/TournamentService';
 import { Tournament, TournamentMatch, TournamentMatchStatus, TournamentSpiritScore } from '../services/types';
 import { getTypography, Layout } from '../theme/DesignSystem';
 import { ThemeColors, useTheme } from '../theme/ThemeContext';
+import SceneShell from '../components/SceneShell';
 
 const toStringParam = (value: string | string[] | undefined) => {
     if (Array.isArray(value)) return value[0] || '';
@@ -24,7 +25,7 @@ const TABS: { key: TabKey; label: string }[] = [
     { key: 'overview', label: 'Overview' },
     { key: 'pools', label: 'Pools' },
     { key: 'bracket', label: 'Bracket' },
-    { key: 'teams', label: 'Participants' },
+    { key: 'teams', label: 'Teams' },
     { key: 'activity', label: 'Activity' },
 ];
 
@@ -312,11 +313,7 @@ export default function TournamentDetailScreen() {
 
     // Tab Renderers
     const renderOverview = () => (
-        <Animated.ScrollView 
-            contentContainerStyle={styles.tabContent}
-            onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: false })}
-            scrollEventThrottle={16}
-        >
+        <View style={styles.tabContent}>
             <View style={styles.infoBox}>
                 {tournament.hostName && (
                     <View style={styles.infoRow}>
@@ -484,15 +481,11 @@ export default function TournamentDetailScreen() {
                     )})}
                 </View>
             )}
-        </Animated.ScrollView>
+        </View>
     );
 
     const renderPools = () => (
-        <Animated.ScrollView 
-            contentContainerStyle={styles.tabContent}
-            onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: false })}
-            scrollEventThrottle={16}
-        >
+        <View style={styles.tabContent}>
             {isCreator && tournament.status === 'draft' && (
                 <TouchableOpacity style={[styles.backBtn, { alignSelf: 'flex-start', marginHorizontal: 16, marginTop: 16, flexDirection: 'row', alignItems: 'center', gap: 6 }]} onPress={() => router.push(`/tournament/pool-config/${tournament.id}`)}>
                     <Ionicons name="options-outline" size={16} color={colors.text} />
@@ -526,90 +519,52 @@ export default function TournamentDetailScreen() {
                         const statusColor = m.matchStatus === 'in_progress' ? '#34C759' : m.matchStatus === 'final' ? colors.textSecondary : m.matchStatus === 'cancelled' ? '#FF3B30' : colors.border;
                         const showAssignmentMeta = isCreator || tournament.fieldAssignmentPublic !== false;
                         return (
-                        <View key={m.id} style={styles.poolMatchRow}>
-                            <View style={styles.poolMatchMeta}>
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                                    <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: statusColor }} />
-                                    <Text style={styles.poolMatchMetaText}>R{m.round}{m.group ? ` · Pool ${m.group}` : ''}</Text>
-                                </View>
-                                {((showAssignmentMeta && (m.fieldName || m.day || m.scheduledTime)) || m.verificationStatus) && (
-                                    <View style={styles.matchMetaChipWrap}>
-                                        {showAssignmentMeta && m.day && (
-                                            <View style={styles.matchMetaChip}>
-                                                <Ionicons name="calendar-outline" size={10} color={colors.textSecondary} />
-                                                <Text style={styles.matchMetaChipText}>D{m.day}</Text>
-                                            </View>
-                                        )}
-                                        {showAssignmentMeta && m.fieldName && (
-                                            <View style={[styles.matchMetaChip, { borderColor: colors.primary }]}>
-                                                <Ionicons name="location-outline" size={10} color={colors.primary} />
-                                                <Text style={[styles.matchMetaChipText, { color: colors.primary }]} numberOfLines={1}>{m.fieldName}</Text>
-                                            </View>
-                                        )}
-                                        {showAssignmentMeta && m.scheduledTime && (
-                                            <View style={styles.matchMetaChip}>
-                                                <Ionicons name="time-outline" size={10} color={colors.textSecondary} />
-                                                <Text style={styles.matchMetaChipText}>{m.scheduledTime}</Text>
-                                            </View>
-                                        )}
-                                        {m.verificationStatus === 'challenged' && (
-                                            <View style={[styles.matchMetaChip, { borderColor: colors.warning }]}>
-                                                <Ionicons name="warning-outline" size={10} color={colors.warning} />
-                                                <Text style={[styles.matchMetaChipText, { color: colors.warning }]}>Review</Text>
-                                            </View>
-                                        )}
-                                    </View>
+                        <TouchableOpacity key={m.id} style={[styles.poolMatchCard, { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 8, gap: 8 }]} onPress={() => openMatchEditor(m.id)} activeOpacity={0.7}>
+                            {/* Meta Left Side */}
+                            <View style={{ width: 50, alignItems: 'center', justifyContent: 'center', borderRightWidth: 1, borderRightColor: colors.border, paddingRight: 8 }}>
+                                <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: statusColor, marginBottom: 4 }} />
+                                <Text style={{ fontSize: 9, fontWeight: 'bold', color: colors.textSecondary, textAlign: 'center' }} numberOfLines={2}>
+                                    {m.group ? `R${m.round} ${m.group}` : m.bracketIdentifier || `R${m.round}`}
+                                </Text>
+                                {showAssignmentMeta && m.fieldName && (
+                                    <Text style={{ fontSize: 8, color: colors.primary, marginTop: 2, textAlign: 'center', fontWeight: 'bold' }} numberOfLines={1}>{m.fieldName}</Text>
+                                )}
+                                {showAssignmentMeta && m.scheduledTime && (
+                                    <Text style={{ fontSize: 8, color: colors.textSecondary, marginTop: 1, textAlign: 'center' }} numberOfLines={1}>{m.scheduledTime}</Text>
+                                )}
+                                {m.verificationStatus === 'challenged' && (
+                                    <Ionicons name="warning" size={10} color={colors.warning} style={{ marginTop: 2 }} />
                                 )}
                             </View>
-                            <View style={[styles.poolMatchTeams, { justifyContent: 'center' }]}>
+
+                            {/* Teams and Score Right Side */}
+                            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                                {/* Team A */}
                                 <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
-                                    {m.captainCheckIn?.teamA && (
-                                        <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: '#34C759', alignItems: 'center', justifyContent: 'center' }}>
-                                            <Ionicons name="checkmark" size={10} color="#FFF" />
-                                        </View>
-                                    )}
-                                    {participantSeed(m.teamAId) != null && (
-                                        <Text style={{ fontSize: 10, fontWeight: '600', color: colors.textSecondary }}>{participantSeed(m.teamAId)}</Text>
-                                    )}
-                                    <Text style={[styles.poolTeamName, { textAlign: 'right', fontSize: 14 }]} numberOfLines={2}>
+                                    {participantSeed(m.teamAId) != null && <Text style={{ fontSize: 9, fontWeight: '600', color: colors.textSecondary }}>{participantSeed(m.teamAId)}</Text>}
+                                    <Text style={[styles.poolTeamName, { fontSize: 13, fontWeight: (m.teamAScore ?? 0) > (m.teamBScore ?? 0) ? '800' : '500', textAlign: 'right', flexShrink: 1 }]} numberOfLines={2}>
                                         {participantName(m.teamAId)}
                                     </Text>
+                                    {m.captainCheckIn?.teamA && <Ionicons name="checkmark-circle" size={10} color="#34C759" />}
                                 </View>
-                                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginHorizontal: 8, minWidth: 90 }}>
-                                    <Text style={{ fontWeight: 'bold', fontSize: 18, color: colors.text, width: 30, textAlign: 'right' }}>{m.teamAScore ?? '-'}</Text>
-                                    <Text style={{ fontWeight: 'bold', fontSize: 18, color: colors.textSecondary, width: 30, textAlign: 'center' }}>–</Text>
-                                    <Text style={{ fontWeight: 'bold', fontSize: 18, color: colors.text, width: 30, textAlign: 'left' }}>{m.teamBScore ?? '-'}</Text>
+
+                                {/* Score */}
+                                <View style={{ paddingHorizontal: 10, alignItems: 'center' }}>
+                                    <Text style={{ fontSize: 15, fontWeight: '800', color: colors.text }}>
+                                        {m.teamAScore ?? '-'} <Text style={{ color: colors.textSecondary, fontWeight: '400' }}>-</Text> {m.teamBScore ?? '-'}
+                                    </Text>
                                 </View>
+
+                                {/* Team B */}
                                 <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 4 }}>
-                                    <Text style={[styles.poolTeamName, { fontSize: 14 }]} numberOfLines={2}>
+                                    {m.captainCheckIn?.teamB && <Ionicons name="checkmark-circle" size={10} color="#34C759" />}
+                                    <Text style={[styles.poolTeamName, { fontSize: 13, fontWeight: (m.teamBScore ?? 0) > (m.teamAScore ?? 0) ? '800' : '500', textAlign: 'left', flexShrink: 1 }]} numberOfLines={2}>
                                         {participantName(m.teamBId)}
                                     </Text>
-                                    {participantSeed(m.teamBId) != null && (
-                                        <Text style={{ fontSize: 10, fontWeight: '600', color: colors.textSecondary }}>{participantSeed(m.teamBId)}</Text>
-                                    )}
-                                    {m.captainCheckIn?.teamB && (
-                                        <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: '#34C759', alignItems: 'center', justifyContent: 'center' }}>
-                                            <Ionicons name="checkmark" size={10} color="#FFF" />
-                                        </View>
-                                    )}
+                                    {participantSeed(m.teamBId) != null && <Text style={{ fontSize: 9, fontWeight: '600', color: colors.textSecondary }}>{participantSeed(m.teamBId)}</Text>}
                                 </View>
                             </View>
-                            <View style={styles.matchActionStack}>
-                                {tournament.teamSelfServeEnabled && (
-                                    <View style={{ flexDirection: 'row', gap: 6 }}>
-                                        <TouchableOpacity style={styles.startGameMiniBtn} onPress={() => startTournamentRecording(m, 'A')}>
-                                            <Text style={styles.startGameMiniText}>A Rec</Text>
-                                        </TouchableOpacity>
-                                        <TouchableOpacity style={styles.startGameMiniBtn} onPress={() => startTournamentRecording(m, 'B')}>
-                                            <Text style={styles.startGameMiniText}>B Rec</Text>
-                                        </TouchableOpacity>
-                                    </View>
-                                )}
-                                <TouchableOpacity style={styles.editBtn} onPress={() => openMatchEditor(m.id)}>
-                                    <Text style={styles.editBtnText}>{m.verificationStatus === 'challenged' ? 'Review' : 'Edit'}</Text>
-                                </TouchableOpacity>
-                            </View>
-                        </View>
+                        </TouchableOpacity>
                     )})}
                 </View>
             )}
@@ -644,7 +599,7 @@ export default function TournamentDetailScreen() {
                     })}
                 </>
             )}
-        </Animated.ScrollView>
+        </View>
     );
 
     const renderBracketTree = (matches: TournamentMatch[], title: string) => {
@@ -753,11 +708,7 @@ export default function TournamentDetailScreen() {
     };
 
     const renderBracketTab = () => (
-        <Animated.ScrollView 
-            contentContainerStyle={styles.tabContent}
-            onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: false })}
-            scrollEventThrottle={16}
-        >
+        <View style={styles.tabContent}>
             {isCreator && tournament.status === 'draft' && (
                 <TouchableOpacity style={[styles.backBtn, { alignSelf: 'flex-start', marginHorizontal: 16, marginTop: 16, flexDirection: 'row', alignItems: 'center', gap: 6 }]} onPress={() => router.push(`/tournament/bracket-config/${tournament.id}`)}>
                     <Ionicons name="git-network-outline" size={16} color={colors.text} />
@@ -772,7 +723,7 @@ export default function TournamentDetailScreen() {
                     {renderBracketTree(consolationMatches, "Consolation Bracket")}
                 </>
             )}
-        </Animated.ScrollView>
+        </View>
     );
     const renderActivityLog = () => {
         const log = tournament?.activityLog || [];
@@ -783,11 +734,7 @@ export default function TournamentDetailScreen() {
             announcement: { name: 'megaphone', color: '#AF52DE' },
         };
         return (
-            <Animated.ScrollView
-                contentContainerStyle={styles.tabContent}
-                onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: false })}
-                scrollEventThrottle={16}
-            >
+            <View style={styles.tabContent}>
                 {log.length === 0 ? (
                     <View style={{ alignItems: 'center', paddingVertical: 40 }}>
                         <Ionicons name="time-outline" size={40} color={colors.textSecondary} />
@@ -812,7 +759,7 @@ export default function TournamentDetailScreen() {
                         })}
                     </View>
                 )}
-            </Animated.ScrollView>
+            </View>
         );
     };
 
@@ -827,11 +774,7 @@ export default function TournamentDetailScreen() {
     };
 
     const renderTeams = () => (
-        <Animated.ScrollView 
-            contentContainerStyle={styles.tabContent}
-            onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: false })}
-            scrollEventThrottle={16}
-        >
+        <View style={styles.tabContent}>
             {isCreator && tournament.status === 'draft' && (
                 <View style={[styles.infoBox, { flexDirection: 'row', alignItems: 'center', marginBottom: 16 }]}>
                     <TextInput 
@@ -866,84 +809,127 @@ export default function TournamentDetailScreen() {
                     </TouchableOpacity>
                 ))}
             </View>
-        </Animated.ScrollView>
+        </View>
     );
 
     return (
+        <SceneShell>
         <View style={styles.container}>
             {/* Header Area */}
             {tournament.bannerUrl ? (
                 <Animated.Image source={{ uri: tournament.bannerUrl }} style={[StyleSheet.absoluteFillObject, { height: 250, opacity: 0.3 }]} resizeMode="cover" />
             ) : null}
-            <Animated.View style={[styles.heroHeader, { paddingTop: headerPadding }]}>
-                <Animated.View style={[styles.heroTopRow, { opacity: scrollY.interpolate({ inputRange: [0, 50], outputRange: [1, 0], extrapolate: 'clamp' }), height: scrollY.interpolate({ inputRange: [0, 50], outputRange: [40, 0], extrapolate: 'clamp' }), overflow: 'hidden' }]}>
-                    <TouchableOpacity style={styles.heroBackBtn} onPress={() => router.back()}>
-                        <Ionicons name="chevron-back" size={24} color="#FFF" />
-                    </TouchableOpacity>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                        <View style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, backgroundColor: tournament.status === 'draft' ? 'rgba(255,255,255,0.15)' : tournament.status === 'active' ? '#34C759' : 'rgba(255,255,255,0.15)' }}>
-                            <Text style={{ color: '#FFF', fontSize: 11, fontWeight: '700', letterSpacing: 0.5 }}>{tournament.status.toUpperCase()}</Text>
+            {/* Fixed Back Button */}
+            <View style={{ position: 'absolute', top: 14, left: 16, zIndex: 105 }}>
+                <TouchableOpacity style={styles.heroBackBtn} onPress={() => router.back()}>
+                    <Ionicons name="chevron-back" size={24} color="#FFF" />
+                </TouchableOpacity>
+            </View>
+
+            {/* Global ScrollView */}
+            <Animated.ScrollView
+                onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: true })}
+                scrollEventThrottle={16}
+                contentContainerStyle={{ paddingTop: 188, paddingBottom: 40, flexGrow: 1 }} // 140 + 48 (tabbar)
+                showsVerticalScrollIndicator={false}
+            >
+                {/* Active Content Area */}
+                <View style={styles.contentArea}>
+                    {activeTab === 'overview' && renderOverview()}
+                    {activeTab === 'pools' && renderPools()}
+                    {activeTab === 'bracket' && renderBracketTab()}
+                    {activeTab === 'teams' && renderTeams()}
+                    {activeTab === 'activity' && renderActivityLog()}
+                </View>
+            </Animated.ScrollView>
+
+            {/* HERO HEADER (Scrolls away natively) */}
+            <Animated.View style={{
+                position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10,
+                transform: [{ translateY: scrollY.interpolate({ inputRange: [0, 100], outputRange: [0, -100], extrapolate: 'extend' }) }]
+            }}>
+                <View style={[styles.heroHeader, { paddingTop: 12, paddingBottom: 36 }]}>
+                    <View style={[styles.heroTopRow, { height: 40 }]}>
+                        {/* Empty space for absolute back button */}
+                        <View style={{ width: 40 }} />
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                            <View style={{ paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, backgroundColor: tournament.status === 'draft' ? 'rgba(255,255,255,0.15)' : tournament.status === 'active' ? '#34C759' : 'rgba(255,255,255,0.15)' }}>
+                                <Text style={{ color: '#FFF', fontSize: 11, fontWeight: '700', letterSpacing: 0.5 }}>{tournament.status.toUpperCase()}</Text>
+                            </View>
+                            {isCreator && (
+                                <TouchableOpacity style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' }} onPress={() => router.push(`/tournament/settings/${tournament.id}`)}>
+                                    <Ionicons name="settings-outline" size={18} color="#FFF" />
+                                </TouchableOpacity>
+                            )}
+                            {isCreator && tournament.status === 'draft' && (
+                                <TouchableOpacity style={{ paddingHorizontal: 20, paddingVertical: 8, borderRadius: 20, backgroundColor: '#34C759' }} onPress={async () => {
+                                    try {
+                                        await TournamentService.startTournament(tournament.id);
+                                        Alert.alert('Tournament Started!', 'Brackets and pool play are now generated and active.');
+                                    } catch (e: any) {
+                                        Alert.alert('Error', e.message);
+                                    }
+                                }}>
+                                    <Text style={{ color: '#FFF', fontWeight: '800', fontSize: 13, letterSpacing: 0.5 }}>START ▶</Text>
+                                </TouchableOpacity>
+                            )}
+                            {!isCreator && tournament.enrollmentMode === 'open' && tournament.status === 'draft' && (
+                                <TouchableOpacity style={[styles.heroBackBtn, { paddingHorizontal: 12, backgroundColor: 'rgba(255,255,255,0.2)' }]} onPress={() => setJoinModalOpen(true)}>
+                                    <Text style={{ color: '#FFF', fontWeight: 'bold' }}>JOIN</Text>
+                                </TouchableOpacity>
+                            )}
                         </View>
-                        {isCreator && (
-                            <TouchableOpacity style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' }} onPress={() => router.push(`/tournament/settings/${tournament.id}`)}>
-                                <Ionicons name="settings-outline" size={18} color="#FFF" />
-                            </TouchableOpacity>
-                        )}
-                        {isCreator && tournament.status === 'draft' && (
-                            <TouchableOpacity style={{ paddingHorizontal: 20, paddingVertical: 8, borderRadius: 20, backgroundColor: '#34C759' }} onPress={async () => {
-                                try {
-                                    await TournamentService.startTournament(tournament.id);
-                                    Alert.alert('Tournament Started!', 'Brackets and pool play are now generated and active.');
-                                } catch (e: any) {
-                                    Alert.alert('Error', e.message);
-                                }
-                            }}>
-                                <Text style={{ color: '#FFF', fontWeight: '800', fontSize: 13, letterSpacing: 0.5 }}>START ▶</Text>
-                            </TouchableOpacity>
-                        )}
-                        {!isCreator && tournament.enrollmentMode === 'open' && tournament.status === 'draft' && (
-                            <TouchableOpacity style={[styles.heroBackBtn, { paddingHorizontal: 12, backgroundColor: 'rgba(255,255,255,0.2)' }]} onPress={() => setJoinModalOpen(true)}>
-                                <Text style={{ color: '#FFF', fontWeight: 'bold' }}>JOIN</Text>
-                            </TouchableOpacity>
-                        )}
                     </View>
-                </Animated.View>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                    {tournament.logoUrl ? (
-                        <Animated.Image source={{ uri: tournament.logoUrl }} style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.surfaceSecondary }} />
-                    ) : null}
-                    <View style={{ flex: 1 }}>
-                        <Animated.Text style={[styles.heroTitle, { fontSize: scrollY.interpolate({ inputRange: [0, 100], outputRange: [28, 20], extrapolate: 'clamp' }) }]} numberOfLines={1}>{tournament.name}</Animated.Text>
-                        <Animated.View style={{ opacity: subtitleOpacity, height: subtitleHeight, overflow: 'hidden' }}>
-                            <Text style={styles.heroSubtitle}>{tournament.hostName ? `Hosted by ${tournament.hostName}` : `Created by Organizer`}</Text>
-                        </Animated.View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4, minHeight: 48 }}>
+                        {tournament.logoUrl ? (
+                            <Image source={{ uri: tournament.logoUrl }} style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: colors.surfaceSecondary }} />
+                        ) : null}
+                        <View style={{ flex: 1 }}>
+                            <Text style={[styles.heroTitle, { fontSize: 26, marginBottom: 2 }]} numberOfLines={1}>{tournament.name}</Text>
+                            <Text style={styles.heroSubtitle} numberOfLines={1}>{tournament.hostName ? `Hosted by ${tournament.hostName}` : `Created by Organizer`}</Text>
+                        </View>
                     </View>
                 </View>
             </Animated.View>
 
-            {/* Tab Bar */}
-            <View style={styles.tabBar}>
-                {visibleTabs.map(tab => (
-                    <TouchableOpacity 
-                        key={tab.key} 
-                        style={[styles.tabItem, activeTab === tab.key && styles.tabItemActive]}
-                        onPress={() => setActiveTab(tab.key)}
-                    >
-                        <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>
-                            {tab.label}
-                        </Text>
-                    </TouchableOpacity>
-                ))}
-            </View>
+            {/* COMPACT HEADER (Fades in, matches Team Profile) */}
+            <Animated.View style={{
+                position: 'absolute', top: 0, left: 0, right: 0, height: 60, zIndex: 50,
+                opacity: scrollY.interpolate({ inputRange: [30, 68], outputRange: [0, 1], extrapolate: 'clamp' })
+            }} pointerEvents="box-none">
+                <View style={[StyleSheet.absoluteFill, { backgroundColor: '#1B2838' }]} pointerEvents="none" />
+                <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16 }} pointerEvents="box-none">
+                    <View style={{ width: 40 }} /> {/* Spacer for back button */}
+                    <Text style={{ fontSize: 26, fontWeight: '900', color: '#FFF', textAlign: 'center', flex: 1, paddingHorizontal: 10, letterSpacing: 0.5 }} numberOfLines={1}>{tournament.name}</Text>
+                    <View style={{ width: 40, alignItems: 'flex-end' }}>
+                        {isCreator && (
+                            <TouchableOpacity style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' }} onPress={() => router.push(`/tournament/settings/${tournament.id}`)}>
+                                <Ionicons name="settings-outline" size={18} color="#FFF" />
+                            </TouchableOpacity>
+                        )}
+                    </View>
+                </View>
+            </Animated.View>
 
-            {/* Active Content */}
-            <View style={styles.contentArea}>
-                {activeTab === 'overview' && renderOverview()}
-                {activeTab === 'pools' && renderPools()}
-                {activeTab === 'bracket' && renderBracketTab()}
-                {activeTab === 'teams' && renderTeams()}
-                {activeTab === 'activity' && renderActivityLog()}
-            </View>
+            {/* STICKY TAB BAR */}
+            <Animated.View style={{
+                position: 'absolute', top: 0, left: 0, right: 0, zIndex: 40,
+                transform: [{ translateY: scrollY.interpolate({ inputRange: [0, 80], outputRange: [140, 60], extrapolateLeft: 'extend', extrapolateRight: 'clamp' }) }]
+            }}>
+                <View style={styles.tabBar}>
+                    {visibleTabs.map(tab => (
+                        <TouchableOpacity 
+                            key={tab.key} 
+                            style={[styles.tabItem, activeTab === tab.key && styles.tabItemActive]}
+                            onPress={() => setActiveTab(tab.key)}
+                        >
+                            <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive, { fontSize: 13 }]} numberOfLines={1} adjustsFontSizeToFit>
+                                {tab.label}
+                            </Text>
+                        </TouchableOpacity>
+                    ))}
+                </View>
+            </Animated.View>
 
             {/* Modals */}
             <Modal visible={matchEditorOpen} animationType="fade" transparent onRequestClose={() => setMatchEditorOpen(false)}>
@@ -1364,6 +1350,7 @@ export default function TournamentDetailScreen() {
                 </View>
             </Modal>
         </View>
+        </SceneShell>
     );
 }
 
@@ -1470,6 +1457,7 @@ const getStyles = (colors: ThemeColors) => {
         },
         contentArea: {
             flex: 1,
+            minHeight: 1000,
         },
         tabContent: {
             padding: 16,
@@ -1683,13 +1671,11 @@ const getStyles = (colors: ThemeColors) => {
         },
         // Teams Tab
         teamsGrid: {
-            flexDirection: 'row',
-            flexWrap: 'wrap',
-            justifyContent: 'space-between',
-            gap: 16,
+            flexDirection: 'column',
+            gap: 12,
         },
         teamCard: {
-            width: '47%',
+            width: '100%',
             backgroundColor: colors.surface,
             borderRadius: Layout.radiusLg,
             borderWidth: 1,

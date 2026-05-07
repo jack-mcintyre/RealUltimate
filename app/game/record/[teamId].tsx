@@ -455,7 +455,16 @@ export default function RecorderScreen() {
     const gameSubscriptionKey = isDualObserverPortal ? (resolvedDualGameId || undefined) : ourTeam?.activeGameId || undefined;
     const { gameState, recordEvent, undo, canUndo, startGame, endGame, updateStreamUrl, handOffRecording, overrideRecordingControl } = useGame(gameSubscriptionKey);
 
-    const [activeLineup, setActiveLineup] = useState<string[]>([]);
+    const [lineup1, setLineup1] = useState<string[]>([]);
+    const [lineup2, setLineup2] = useState<string[]>([]);
+    const activeLineup = isDualObserverPortal && observerRosterView === 'opponent' ? lineup2 : lineup1;
+    const setActiveLineup = (action: React.SetStateAction<string[]>) => {
+        if (isDualObserverPortal && observerRosterView === 'opponent') {
+            setLineup2(action);
+        } else {
+            setLineup1(action);
+        }
+    };
 
     // --- Setup State ---
     const [advancedTrackingSetup, setAdvancedTrackingSetup] = useState(false);
@@ -836,6 +845,11 @@ export default function RecorderScreen() {
 
         const timeElapsedMs = possessionStartTime ? Date.now() - possessionStartTime : 0;
         const actorId = (() => {
+            if (isDualObserverPortal) {
+                return gameState.advancedTracking && gameState.possession === rosterPerspectiveTeamId
+                    ? (discHolderId || selectedOurPlayerId || undefined)
+                    : (selectedOurPlayerId || discHolderId || undefined);
+            }
             if (type === 'Opponent Score' || type === 'Opponent Turnover' || type === 'Callahan_THEM') {
                 return (isObserverModeActive ? selectedOpponentPlayerId : null) || undefined;
             }
@@ -927,7 +941,8 @@ export default function RecorderScreen() {
     }, [gameState.isGameActive]);
 
     useEffect(() => {
-        setActiveLineup((prev) => prev.slice(0, lineupSize));
+        setLineup1((prev) => prev.slice(0, lineupSize));
+        setLineup2((prev) => prev.slice(0, lineupSize));
     }, [lineupSize]);
 
     useEffect(() => {
@@ -935,8 +950,10 @@ export default function RecorderScreen() {
     }, [gameState.isGameActive]);
 
     useEffect(() => {
-        if (!isDualObserverPortal || !gameState.isGameActive || observerRosterView !== 'ours') return;
-        setActiveLineup((prev) => {
+        if (!isDualObserverPortal || !gameState.isGameActive) return;
+        
+        // Auto-populate Team 1
+        setLineup1((prev) => {
             if (prev.length > 0) return prev;
             const tid = gameState.team1Id;
             const liveVals = dualTeam1?.players ? Object.values(dualTeam1.players) : [];
@@ -944,7 +961,18 @@ export default function RecorderScreen() {
             const pool = liveVals.length > 0 ? liveVals : snapVals;
             return pool.slice(0, lineupSize).map((p) => p.id).filter(Boolean);
         });
-    }, [isDualObserverPortal, gameState.isGameActive, gameState.team1Id, observerRosterView, dualTeam1, gameState.neutralObserverRosters, lineupSize]);
+
+        // Auto-populate Team 2
+        setLineup2((prev) => {
+            if (prev.length > 0) return prev;
+            const tid = gameState.team2Id;
+            if (!tid) return prev;
+            const liveVals = dualTeam2?.players ? Object.values(dualTeam2.players) : [];
+            const snapVals = Object.values(gameState.neutralObserverRosters?.[tid] || {});
+            const pool = liveVals.length > 0 ? liveVals : snapVals;
+            return pool.slice(0, lineupSize).map((p) => p.id).filter(Boolean);
+        });
+    }, [isDualObserverPortal, gameState.isGameActive, gameState.team1Id, gameState.team2Id, dualTeam1, dualTeam2, gameState.neutralObserverRosters, lineupSize]);
 
     useEffect(() => {
         if (!teamId || isDualObserverPortal) return;
@@ -2065,7 +2093,11 @@ export default function RecorderScreen() {
                                 offensivePerspective ? (
                                     <View style={styles.actionBoard}>
                                         <View style={styles.actionBoardRow}>
-                                            <TactileButton title="Goal" icon="aperture" color={colors.primary} disabled={!hasCurrentActor || actionLockedByPendingPass} onPress={() => handleAction('G')} />
+                                            <TactileButton title="Goal" icon="aperture" color={colors.primary} disabled={!hasCurrentActor || actionLockedByPendingPass} onPress={() => {
+                                                // If we are in dual observer mode looking at the opponent, a "Goal" logged by them is actually an "Opponent Score" relative to the game canonical storage
+                                                const resolvedType = (isDualObserverPortal && observerRosterView === 'opponent') ? 'Opponent Score' : 'G';
+                                                handleAction(resolvedType);
+                                            }} />
                                             <TactileButton title="Throwaway" icon="close-circle" color={colors.error} disabled={!hasCurrentActor || actionLockedByPendingPass} onPress={() => handleAction('T')} />
                                         </View>
                                         <View style={styles.actionBoardRow}>

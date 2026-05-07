@@ -5,6 +5,7 @@ import { GameLogic } from '../services/GameLogic';
 import { InteractionService } from '../services/InteractionService';
 import { TeamService, sanitizeForFirebase } from '../services/TeamService';
 import { TournamentService } from '../services/TournamentService';
+import { NotificationService } from '../services/NotificationService';
 import { EventType, GameEvent, GameState, INITIAL_GAME_STATE, Player, isRealTeamId } from '../services/types';
 
 type TournamentRecordingContext = {
@@ -89,6 +90,19 @@ export const useGame = (gameId?: string) => {
                     newState.score2,
                     prevState.gameStartTimestamp || 0
                 ).catch(() => { /* non-critical */ });
+
+                // Push Notification Fanout (Free Client-Side)
+                const scoredTeamId = newState.score1 > (prevState.score1 || 0) ? newState.team1Id : newState.score2 > (prevState.score2 || 0) ? newState.team2Id : null;
+                const scorerName = newState.score1 > (prevState.score1 || 0) ? (newState.team1Name || 'Our Team') : (newState.team2Name || 'Opponent');
+                if (scoredTeamId) {
+                    NotificationService.dispatchScoreUpdateNotification(
+                        prevState.gameId, 
+                        scoredTeamId, 
+                        newState.score1 || 0, 
+                        newState.score2 || 0, 
+                        scorerName
+                    ).catch(() => {});
+                }
             }
 
             return newState;
@@ -213,6 +227,14 @@ export const useGame = (gameId?: string) => {
                 tournamentContext.slot
             );
         }
+
+        NotificationService.dispatchGameStartNotification(
+            newGameId,
+            team1Id,
+            team2Id,
+            'Your Team',
+            team2Name || 'Opponent'
+        ).catch(() => {});
 
         return newGameId;
     };

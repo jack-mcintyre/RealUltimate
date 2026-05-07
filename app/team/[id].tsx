@@ -569,7 +569,7 @@ export default function TeamDashboardScreen() {
         advancedStatsPublic: pageConfig.settings?.advancedStatsPublic ?? true,
         mediaPublic: pageConfig.settings?.mediaPublic ?? true,
         showCoachCode: pageConfig.settings?.showCoachCode ?? false,
-        showFanCode: pageConfig.settings?.showFanCode ?? false,
+        showFanCode: pageConfig.settings?.showFanCode ?? true,
         showFanCount: pageConfig.settings?.showFanCount ?? true,
     };
     const canSeeAdvancedStats = pageSettings.advancedStatsPublic || canEditTeamPage;

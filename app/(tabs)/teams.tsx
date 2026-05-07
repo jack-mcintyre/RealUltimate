@@ -1417,9 +1417,10 @@ const getStyles = (colors: ThemeColors) => {
         playWithoutCardSub: { ...Typography.bodySmall, color: colors.textSecondary, lineHeight: 18 },
 
         // Action Grid
-        actionGrid: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 32 },
+        actionGrid: { flexDirection: 'row', width: '100%', gap: 8, marginBottom: 32 },
         actionGridItem: {
-            width: '31.5%',
+            flex: 1,
+            minWidth: 0,
             minHeight: 120,
             backgroundColor: colors.surface,
             paddingVertical: 12,

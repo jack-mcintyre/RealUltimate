@@ -623,7 +623,7 @@ export default function ProfileScreen() {
                         
                         <View style={{ width: '100%', marginBottom: 24 }}>
                             {[
-                                { key: 'all', label: 'Every Score & Event', desc: 'Real-time updates for every point.' },
+                                { key: 'all', label: 'Every Score', desc: 'Real-time updates for every point.' },
                                 { key: 'game', label: 'Game Start & End Only', desc: 'Alerts when a match begins or concludes.' },
                                 { key: 'off', label: 'Off', desc: 'Do not send push notifications.' }
                             ].map(opt => (

@@ -39,6 +39,10 @@ function TransparentNavigationShell({ children }: { children: React.ReactNode })
   );
 }
 
+import { NotificationService } from './services/NotificationService';
+
+NotificationService.setupNotificationHandler();
+
 function useProtectedRoutes() {
   const segments = useSegments();
   const router = useRouter();
@@ -60,6 +64,9 @@ function useProtectedRoutes() {
 
       if (!user && !isPublicRoute) {
         router.replace("/");
+        NotificationService.removePushToken();
+      } else if (user) {
+        NotificationService.syncPushToken();
       }
     });
 
