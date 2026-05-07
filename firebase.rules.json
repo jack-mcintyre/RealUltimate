@@ -19,6 +19,7 @@
     },
     "teams": {
       ".read": "auth != null",
+      ".indexOn": ["coachId"],
       "$teamId": {
         ".read": "auth != null",
         ".write": "auth != null && ((!data.exists() && newData.exists() && newData.child('coachId').val() === auth.uid) || (data.exists() && !newData.exists() && data.child('coachId').val() === auth.uid) || (data.exists() && newData.exists() && (data.child('coachId').val() === auth.uid || data.child('managers').child(auth.uid).exists())))",
@@ -80,14 +81,14 @@
         ".read": "auth != null",
         ".indexOn": ["status", "createdAt", "completedAt"],
         "$gameId": {
-          ".write": "auth != null && (root.child('teams').child($teamId).child('coachId').val() === auth.uid || root.child('teams').child($teamId).child('managers').child(auth.uid).exists() || root.child('teams').child(root.child('games').child($gameId).child('team1Id').val()).child('coachId').val() === auth.uid || root.child('teams').child(root.child('games').child($gameId).child('team1Id').val()).child('managers').child(auth.uid).exists() || (root.child('games').child($gameId).child('recordingSource').val() === 'observer_neutral' && root.child('games').child($gameId).child('observerRecorderUid').val() === auth.uid && (root.child('games').child($gameId).child('team1Id').val() === $teamId || root.child('games').child($gameId).child('team2Id').val() === $teamId)))"
+          ".write": "auth != null && (root.child('teams').child($teamId).child('coachId').val() === auth.uid || root.child('teams').child($teamId).child('managers').child(auth.uid).exists() || root.child('teams').child(root.child('games').child($gameId).child('team1Id').val()).child('coachId').val() === auth.uid || root.child('teams').child(root.child('games').child($gameId).child('team1Id').val()).child('managers').child(auth.uid).exists() || root.child('teams').child(root.child('games').child($gameId).child('team2Id').val()).child('coachId').val() === auth.uid || root.child('teams').child(root.child('games').child($gameId).child('team2Id').val()).child('managers').child(auth.uid).exists() || root.child('games').child($gameId).child('currentRecorderId').val() === auth.uid || (root.child('games').child($gameId).child('recordingSource').val() === 'observer_neutral' && root.child('games').child($gameId).child('observerRecorderUid').val() === auth.uid && (root.child('games').child($gameId).child('team1Id').val() === $teamId || root.child('games').child($gameId).child('team2Id').val() === $teamId)) || (!newData.exists() && !root.child('teams').child($teamId).exists()) || (!newData.exists() && !root.child('games').child($gameId).exists()))"
         }
       }
     },
     "teamJoinCodes": {
       "$teamId": {
         ".read": "auth != null && (root.child('teams').child($teamId).child('coachId').val() === auth.uid || root.child('teams').child($teamId).child('managers').child(auth.uid).exists())",
-        ".write": "auth != null && (root.child('teams').child($teamId).child('coachId').val() === auth.uid || root.child('teams').child($teamId).child('managers').child(auth.uid).exists())",
+        ".write": "auth != null && (root.child('teams').child($teamId).child('coachId').val() === auth.uid || root.child('teams').child($teamId).child('managers').child(auth.uid).exists() || (!newData.exists() && !root.child('teams').child($teamId).exists()))",
         "coach": {
           ".validate": "newData.isString() && newData.val().matches(/^[A-Z0-9]{6}$/)"
         },
@@ -102,7 +103,7 @@
     "accessCodes": {
       "$code": {
         ".read": "auth != null && $code.matches(/^[A-Z0-9]{6}$/)",
-        ".write": "auth != null && $code.matches(/^[A-Z0-9]{6}$/) && ((!data.exists() && newData.hasChildren(['teamId','role']) && (newData.child('role').val() === 'coach' || newData.child('role').val() === 'spectator' || newData.child('role').val() === 'observer') && (root.child('teams').child(newData.child('teamId').val()).child('coachId').val() === auth.uid || root.child('teams').child(newData.child('teamId').val()).child('managers').child(auth.uid).exists())) || (data.exists() && (root.child('teams').child(data.child('teamId').val()).child('coachId').val() === auth.uid || root.child('teams').child(data.child('teamId').val()).child('managers').child(auth.uid).exists())))"
+        ".write": "auth != null && $code.matches(/^[A-Z0-9]{6}$/) && ((!data.exists() && newData.hasChildren(['teamId','role']) && (newData.child('role').val() === 'coach' || newData.child('role').val() === 'spectator' || newData.child('role').val() === 'observer') && (root.child('teams').child(newData.child('teamId').val()).child('coachId').val() === auth.uid || root.child('teams').child(newData.child('teamId').val()).child('managers').child(auth.uid).exists())) || (data.exists() && (root.child('teams').child(data.child('teamId').val()).child('coachId').val() === auth.uid || root.child('teams').child(data.child('teamId').val()).child('managers').child(auth.uid).exists() || (!newData.exists() && !root.child('teams').child(data.child('teamId').val()).exists()))))"
       }
     },
     "publicTournaments": {
@@ -173,7 +174,7 @@
       ".indexOn": ["team1Id", "team2Id", "tournamentId", "tournamentMatchId", "isGameActive"],
       "$gameId": {
         ".read": "auth != null",
-        ".write": "auth != null && ((!data.exists() && (root.child('teams').child(newData.child('team1Id').val()).child('coachId').val() === auth.uid || root.child('teams').child(newData.child('team1Id').val()).child('managers').child(auth.uid).exists() || (newData.child('recordingSource').val() === 'observer_neutral' && newData.child('observerRecorderUid').val() === auth.uid && newData.child('team1Id').val() !== newData.child('team2Id').val()))) || (data.exists() && ((data.child('recordingSource').val() === 'observer_neutral' && data.child('observerRecorderUid').val() === auth.uid) || root.child('teams').child(data.child('team1Id').val()).child('coachId').val() === auth.uid || root.child('teams').child(data.child('team1Id').val()).child('managers').child(auth.uid).exists() || (data.child('activeObserverSessionPin').exists() && root.child('gameObserverSessions').child($gameId).child(data.child('activeObserverSessionPin').val()).child('activeUid').val() === auth.uid))))",
+        ".write": "auth != null && ((!data.exists() && (root.child('teams').child(newData.child('team1Id').val()).child('coachId').val() === auth.uid || root.child('teams').child(newData.child('team1Id').val()).child('managers').child(auth.uid).exists() || (newData.child('recordingSource').val() === 'observer_neutral' && newData.child('observerRecorderUid').val() === auth.uid && newData.child('team1Id').val() !== newData.child('team2Id').val()))) || (data.exists() && ((data.child('recordingSource').val() === 'observer_neutral' && data.child('observerRecorderUid').val() === auth.uid) || data.child('currentRecorderId').val() === auth.uid || root.child('teams').child(data.child('team1Id').val()).child('coachId').val() === auth.uid || root.child('teams').child(data.child('team1Id').val()).child('managers').child(auth.uid).exists() || root.child('teams').child(data.child('team2Id').val()).child('coachId').val() === auth.uid || root.child('teams').child(data.child('team2Id').val()).child('managers').child(auth.uid).exists() || (data.child('activeObserverSessionPin').exists() && root.child('gameObserverSessions').child($gameId).child(data.child('activeObserverSessionPin').val()).child('activeUid').val() === auth.uid) || (!newData.exists() && !root.child('teams').child(data.child('team1Id').val()).exists()))))",
         "reactions": {
           "$reactionId": {
             ".write": "auth != null && ((!data.exists() && newData.exists() && newData.child('userId').val() === auth.uid) || (data.exists() && !newData.exists() && data.child('userId').val() === auth.uid))",

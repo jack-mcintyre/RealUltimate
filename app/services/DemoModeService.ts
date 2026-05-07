@@ -1,4 +1,4 @@
-import { get, push, ref, set, update } from 'firebase/database';
+import { get, push, ref, set, update, query, orderByChild, equalTo } from 'firebase/database';
 import { db } from '../../firebaseConfig';
 import { GameLogic } from './GameLogic';
 import { GameService, rosterSnapshotFromPlayerList } from './GameService';
@@ -309,17 +309,21 @@ async function persistFinishedGame(state: GameState, startedAt: number): Promise
 }
 
 async function purgeTeamJoinArtifacts(teamId: string): Promise<void> {
-    const codesSnap = await get(ref(db, `teamJoinCodes/${teamId}`));
-    if (codesSnap.exists()) {
-        const c = codesSnap.val() as { coach?: string; spectator?: string; observer?: string };
-        for (const key of ['coach', 'spectator', 'observer'] as const) {
-            const code = c[key];
-            if (typeof code === 'string' && code.length > 0) {
-                await set(ref(db, `accessCodes/${code}`), null);
+    try {
+        const codesSnap = await get(ref(db, `teamJoinCodes/${teamId}`));
+        if (codesSnap.exists()) {
+            const c = codesSnap.val() as { coach?: string; spectator?: string; observer?: string };
+            for (const key of ['coach', 'spectator', 'observer'] as const) {
+                const code = c[key];
+                if (typeof code === 'string' && code.length > 0) {
+                    await set(ref(db, `accessCodes/${code}`), null);
+                }
             }
         }
+        await set(ref(db, `teamJoinCodes/${teamId}`), null);
+    } catch (e) {
+        console.warn('[DemoModeService] purgeTeamJoinArtifacts failed', teamId, e);
     }
-    await set(ref(db, `teamJoinCodes/${teamId}`), null);
 }
 
 async function removeDemoGameArtifacts(gameId: string): Promise<void> {
@@ -328,23 +332,44 @@ async function removeDemoGameArtifacts(gameId: string): Promise<void> {
     const game = gameSnap.val() as GameState;
     const t1 = game.team1Id;
     const t2 = game.team2Id;
+    /** Rules use `games/{id}` for teamGameLinks auth; delete links while the game row still exists. */
+    try {
+        await set(ref(db, `teamGameLinks/${t1}/${gameId}`), null);
+    } catch (e) {
+        console.warn('[DemoModeService] teamGameLinks delete failed', t1, gameId, e);
+    }
+    if (isRealTeamId(t2)) {
+        try {
+            await set(ref(db, `teamGameLinks/${t2}/${gameId}`), null);
+        } catch (e) {
+            console.warn('[DemoModeService] teamGameLinks delete failed', t2, gameId, e);
+        }
+    }
+    try {
+        await set(ref(db, `teams/${t1}/pastGames/${gameId}`), null);
+    } catch (e) {
+        console.warn('[DemoModeService] pastGames delete failed', t1, gameId, e);
+    }
+    if (isRealTeamId(t2)) {
+        try {
+            await set(ref(db, `teams/${t2}/pastGames/${gameId}`), null);
+        } catch (e) {
+            console.warn('[DemoModeService] pastGames delete failed', t2, gameId, e);
+        }
+    }
     await set(ref(db, `games/${gameId}`), null);
-    await set(ref(db, `teamGameLinks/${t1}/${gameId}`), null);
-    if (isRealTeamId(t2)) {
-        await set(ref(db, `teamGameLinks/${t2}/${gameId}`), null);
-    }
-    await set(ref(db, `teams/${t1}/pastGames/${gameId}`), null);
-    if (isRealTeamId(t2)) {
-        await set(ref(db, `teams/${t2}/pastGames/${gameId}`), null);
-    }
 }
 
 async function clearScheduledGamesForTeam(teamId: string): Promise<void> {
-    const snap = await get(ref(db, `teams/${teamId}/scheduledGames`));
-    if (!snap.exists()) return;
-    const data = snap.val() as Record<string, unknown>;
-    for (const id of Object.keys(data || {})) {
-        await set(ref(db, `teams/${teamId}/scheduledGames/${id}`), null);
+    try {
+        const snap = await get(ref(db, `teams/${teamId}/scheduledGames`));
+        if (!snap.exists()) return;
+        const data = snap.val() as Record<string, unknown>;
+        for (const id of Object.keys(data || {})) {
+            await set(ref(db, `teams/${teamId}/scheduledGames/${id}`), null);
+        }
+    } catch (e) {
+        console.warn('[DemoModeService] clearScheduledGamesForTeam failed', teamId, e);
     }
 }
 
@@ -380,6 +405,19 @@ async function collectDemoTeamIdsForRemoval(uid: string, p: Record<string, unkno
         })
     );
 
+    /** Orphan demo teams still under `teams/` after user removes list links manually — list scan misses these. */
+    const orphanedTeamsQuery = query(ref(db, 'teams'), orderByChild('coachId'), equalTo(uid));
+    const orphanedSnap = await get(orphanedTeamsQuery);
+    if (orphanedSnap.exists()) {
+        const all = orphanedSnap.val() as Record<string, Partial<Team>>;
+        for (const [tid, tm] of Object.entries(all)) {
+            const n = tm.name;
+            if (typeof n === 'string' && DEMO_PACK_TEAM_NAMES.has(n)) {
+                ids.add(tid);
+            }
+        }
+    }
+
     return [...ids];
 }
 
@@ -401,7 +439,11 @@ async function executeDemoPackPurge(uid: string, profileSnapshot: Record<string,
     }
 
     for (const gid of gameIds) {
-        await removeDemoGameArtifacts(gid);
+        try {
+            await removeDemoGameArtifacts(gid);
+        } catch (e) {
+            console.warn('[DemoModeService] removeDemoGameArtifacts failed', gid, e);
+        }
     }
 
     for (const tid of teamIds) {
@@ -417,7 +459,11 @@ async function executeDemoPackPurge(uid: string, profileSnapshot: Record<string,
         if (tSnap.exists()) {
             const team = tSnap.val() as Team;
             if (team.coachId === uid) {
-                await TeamService.deleteTeam(tid, uid);
+                try {
+                    await TeamService.deleteTeam(tid, uid);
+                } catch (e) {
+                    console.warn('[DemoModeService] deleteTeam failed', tid, e);
+                }
             }
         }
         await set(ref(db, `users/${uid}/spectated_teams/${tid}`), null);
@@ -484,15 +530,13 @@ export const DemoModeService = {
         displayName: string,
         options?: { force?: boolean }
     ): Promise<DemoSeedResult> => {
-        const installed = await DemoModeService.isPackInstalled(uid);
-        if (installed && !options?.force) {
-            throw new Error('Demo sample pack is already installed for this account.');
-        }
-        if (options?.force) {
-            const profSnap = await get(ref(db, `users/${uid}/profile`));
-            const p = profSnap.exists() ? (profSnap.val() as Record<string, unknown>) : {};
-            const teamIds = await collectDemoTeamIdsForRemoval(uid, p);
-            await executeDemoPackPurge(uid, p, teamIds);
+        const profSnap = await get(ref(db, `users/${uid}/profile`));
+        const p = profSnap.exists() ? (profSnap.val() as Record<string, unknown>) : {};
+        const packInstalled = await DemoModeService.isPackInstalled(uid);
+        const existingDemoTeamIds = await collectDemoTeamIdsForRemoval(uid, p);
+        const shouldPurge = packInstalled || existingDemoTeamIds.length > 0 || options?.force === true;
+        if (shouldPurge) {
+            await executeDemoPackPurge(uid, p, existingDemoTeamIds);
         }
 
         const universityIowaTeamId = await TeamService.createTeam('University of Iowa', uid, email, displayName);
@@ -610,22 +654,16 @@ export const DemoModeService = {
      */
     removeDemoPack: async (uid: string): Promise<void> => {
         const profSnap = await get(ref(db, `users/${uid}/profile`));
-        if (!profSnap.exists()) {
-            throw new Error('Profile not found.');
-        }
-        const p = profSnap.val() as Record<string, unknown>;
-        const demoPackLeafSnap = await get(ref(db, `users/${uid}/profile/${DEMO_PACK_KEY}`));
-        const demoPackLeafInstalled = demoPackLeafSnap.exists() && !!demoPackLeafSnap.val();
-        const hasDemoMarker =
-            demoPackLeafInstalled ||
-            !!p[DEMO_PACK_KEY] ||
+        const p = profSnap.exists() ? (profSnap.val() as Record<string, unknown>) : {};
+
+        const packInstalled = await DemoModeService.isPackInstalled(uid);
+        const teamIds = await collectDemoTeamIdsForRemoval(uid, p);
+        const hasProfileDemoIds =
             typeof p.demoUniversityIowaTeamId === 'string' ||
             typeof p.demoIowaStateTeamId === 'string' ||
             typeof p.demoIowaTeamId === 'string';
 
-        const teamIds = await collectDemoTeamIdsForRemoval(uid, p);
-
-        if (!hasDemoMarker && teamIds.length === 0) {
+        if (!packInstalled && teamIds.length === 0 && !hasProfileDemoIds) {
             throw new Error('Demo sample is not installed.');
         }
 

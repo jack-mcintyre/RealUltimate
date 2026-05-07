@@ -1,4 +1,4 @@
-import { get, onValue, push, ref, set } from 'firebase/database';
+import { get, onValue, push, ref, set, query, limitToLast } from 'firebase/database';
 import { db } from '../../firebaseConfig';
 import { GameEvent, GameState, INITIAL_GAME_STATE, isRealTeamId, Player, Team } from './types';
 
@@ -195,8 +195,8 @@ export const GameService = {
                 });
             } else if (!hasLinkIndex) {
                 // Fallback for older data created before per-team game link indexes.
-                const gamesRef = ref(db, 'games');
-                const snap = await get(gamesRef);
+                const gamesQuery = query(ref(db, 'games'), limitToLast(300));
+                const snap = await get(gamesQuery);
 
                 if (snap.exists()) {
                     snap.forEach((childSnap: any) => {

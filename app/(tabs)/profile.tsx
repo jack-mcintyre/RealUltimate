@@ -10,6 +10,7 @@ import ImageCropperModal from '../../src/components/ImageCropperModal';
 import DemoPresentationMenuModal from '../components/DemoPresentationMenuModal';
 import DemoWalkthroughModal from '../components/DemoWalkthroughModal';
 import TabSceneShell from '../components/TabSceneShell';
+import { alertUser, confirmDestructive, formatErrorMessage } from '../utils/userFeedback';
 import { AccountService } from '../services/AccountService';
 import { resolveDemoTourTeamIds } from '../services/demoTourTeamIds';
 import { DemoModeService } from '../services/DemoModeService';
@@ -309,19 +310,26 @@ export default function ProfileScreen() {
 
     const resolvedTourIds = useMemo(() => resolveDemoTourTeamIds(demoTourTeams, teams), [demoTourTeams, teams]);
 
-    const runDemoSeed = async (force: boolean): Promise<boolean> => {
+    const hasLiveDemoContent = useMemo(
+        () =>
+            demoPackInstalled ||
+            demoTourTeams !== null ||
+            teams.some((t) => t.name === 'University of Iowa' || t.name === 'Iowa State'),
+        [demoPackInstalled, demoTourTeams, teams]
+    );
+
+    const runDemoSeed = async (): Promise<boolean> => {
         if (!user) return false;
         setDemoSeeding(true);
         try {
             const name = (displayName || user.displayName || user.email?.split('@')[0] || 'Coach').trim();
-            const result = await DemoModeService.seedDemoWorld(user.uid, user.email || '', name, { force });
+            const result = await DemoModeService.seedDemoWorld(user.uid, user.email || '', name);
             setDemoTourTeams({ u: result.universityIowaTeamId, follow: result.iowaStateTeamId });
             setDemoPackInstalled(true);
             setDemoWalkthroughVisible(true);
             return true;
         } catch (e: unknown) {
-            const msg = e instanceof Error ? e.message : typeof e === 'string' ? e : String(e);
-            Alert.alert('Demo unavailable', msg || 'Please try again.');
+            alertUser('Demo unavailable', formatErrorMessage(e) || 'Please try again.');
             return false;
         } finally {
             setDemoSeeding(false);
@@ -329,33 +337,25 @@ export default function ProfileScreen() {
     };
 
     const handleRemoveDemoPack = () => {
-        if (!user) return;
-        Alert.alert(
-            'Remove Iowa demo data?',
-            'This deletes the University of Iowa and Iowa State sample teams, their finished games, schedules, and demo profile flags. You cannot undo this.',
-            [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                    text: 'Remove',
-                    style: 'destructive',
-                    onPress: () => {
-                        void (async () => {
-                            setIsRemovingDemo(true);
-                            try {
-                                await DemoModeService.removeDemoPack(user.uid);
-                                setDemoTourTeams(null);
-                                setDemoPackInstalled(false);
-                                Alert.alert('Demo removed', 'Sample teams and data were deleted.');
-                            } catch (e: any) {
-                                Alert.alert('Could not remove demo', e?.message || 'Try again.');
-                            } finally {
-                                setIsRemovingDemo(false);
-                            }
-                        })();
-                    },
-                },
-            ]
-        );
+        void (async () => {
+            if (!user) return;
+            const confirmed = await confirmDestructive(
+                'Remove Iowa demo data?',
+                'This deletes the University of Iowa and Iowa State sample teams, their finished games, schedules, and demo profile flags. You cannot undo this.'
+            );
+            if (!confirmed) return;
+            setIsRemovingDemo(true);
+            try {
+                await DemoModeService.removeDemoPack(user.uid);
+                setDemoTourTeams(null);
+                setDemoPackInstalled(false);
+                alertUser('Demo removed', 'Sample teams and data were deleted.');
+            } catch (e: unknown) {
+                alertUser('Could not remove demo', formatErrorMessage(e));
+            } finally {
+                setIsRemovingDemo(false);
+            }
+        })();
     };
 
     const handleOpenDemoTour = () => {
@@ -396,7 +396,7 @@ export default function ProfileScreen() {
                                 <Ionicons name="chevron-forward" size={20} color={colors.border} />
                             </TouchableOpacity>
                             <TouchableOpacity
-                                style={[styles.optionRow, { borderBottomWidth: demoPackInstalled ? 1 : 0 }]}
+                                style={[styles.optionRow, { borderBottomWidth: hasLiveDemoContent ? 1 : 0 }]}
                                 activeOpacity={0.7}
                                 onPress={() => setDemoMenuVisible(true)}
                                 disabled={demoSeeding}
@@ -405,8 +405,8 @@ export default function ProfileScreen() {
                                 <View style={{ flex: 1, marginLeft: 16 }}>
                                     <Text style={styles.optionText}>Load Iowa sample data</Text>
                                     <Text style={styles.subText}>
-                                        {demoPackInstalled
-                                            ? 'Optional: add another showcase pair, or use Open tour above.'
+                                        {hasLiveDemoContent
+                                            ? 'Removes leftover demo teams if needed, then loads the showcase. Use Open tour above anytime.'
                                             : 'Two teams, rosters, finished games, and a scheduled match.'}
                                     </Text>
                                 </View>
@@ -416,7 +416,7 @@ export default function ProfileScreen() {
                                     <Ionicons name="chevron-forward" size={20} color={colors.border} />
                                 )}
                             </TouchableOpacity>
-                            {demoPackInstalled && (
+                            {hasLiveDemoContent && (
                                 <TouchableOpacity
                                     style={[styles.optionRow, { borderBottomWidth: 0 }]}
                                     activeOpacity={0.7}
@@ -599,15 +599,11 @@ export default function ProfileScreen() {
             <DemoPresentationMenuModal
                 visible={demoMenuVisible}
                 onClose={() => setDemoMenuVisible(false)}
-                demoPackInstalled={demoPackInstalled}
+                hasLiveDemoContent={hasLiveDemoContent}
                 isSeeding={demoSeeding}
                 onOpenTour={() => setDemoWalkthroughVisible(true)}
                 onLoadSampleData={async () => {
-                    const ok = await runDemoSeed(false);
-                    if (ok) setDemoMenuVisible(false);
-                }}
-                onAddAnotherSet={async () => {
-                    const ok = await runDemoSeed(true);
+                    const ok = await runDemoSeed();
                     if (ok) setDemoMenuVisible(false);
                 }}
             />

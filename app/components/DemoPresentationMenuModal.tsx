@@ -4,26 +4,25 @@ import { ActivityIndicator, Modal, StyleSheet, Text, TouchableOpacity, View } fr
 import { getTypography, Layout } from '../theme/DesignSystem';
 import { ThemeColors, useTheme } from '../theme/ThemeContext';
 
-type Step = 'menu' | 'confirmLoad' | 'confirmAdd';
+type Step = 'menu' | 'confirmLoad';
 
 export type DemoPresentationMenuModalProps = {
     visible: boolean;
     onClose: () => void;
-    demoPackInstalled: boolean;
+    /** True when demo pack flag, stored tour IDs, or Iowa demo team names are still on the account */
+    hasLiveDemoContent: boolean;
     isSeeding: boolean;
     onOpenTour: () => void;
     onLoadSampleData: () => void;
-    onAddAnotherSet: () => void;
 };
 
 export default function DemoPresentationMenuModal({
     visible,
     onClose,
-    demoPackInstalled,
+    hasLiveDemoContent,
     isSeeding,
     onOpenTour,
     onLoadSampleData,
-    onAddAnotherSet,
 }: DemoPresentationMenuModalProps) {
     const { colors } = useTheme();
     const styles = getStyles(colors);
@@ -60,38 +59,29 @@ export default function DemoPresentationMenuModal({
                                 <Text style={styles.primaryBtnText}>Open guided tour</Text>
                             </TouchableOpacity>
 
-                            {!demoPackInstalled ? (
-                                <TouchableOpacity
-                                    style={styles.secondaryBtn}
-                                    onPress={() => setStep('confirmLoad')}
-                                    disabled={isSeeding}
-                                    activeOpacity={0.85}
-                                >
-                                    <Ionicons name="download-outline" size={18} color={colors.primary} />
-                                    <Text style={styles.secondaryBtnText}>Load Iowa sample data</Text>
-                                </TouchableOpacity>
-                            ) : (
-                                <TouchableOpacity
-                                    style={styles.secondaryBtn}
-                                    onPress={() => setStep('confirmAdd')}
-                                    disabled={isSeeding}
-                                    activeOpacity={0.85}
-                                >
-                                    <Ionicons name="duplicate-outline" size={18} color={colors.primary} />
-                                    <Text style={styles.secondaryBtnText}>Add another showcase set</Text>
-                                </TouchableOpacity>
-                            )}
+                            <TouchableOpacity
+                                style={styles.secondaryBtn}
+                                onPress={() => setStep('confirmLoad')}
+                                disabled={isSeeding}
+                                activeOpacity={0.85}
+                            >
+                                <Ionicons name="download-outline" size={18} color={colors.primary} />
+                                <Text style={styles.secondaryBtnText}>
+                                    {hasLiveDemoContent ? 'Load or replace Iowa sample data' : 'Load Iowa sample data'}
+                                </Text>
+                            </TouchableOpacity>
 
                             <TouchableOpacity style={styles.ghostBtn} onPress={closeIfIdle} disabled={isSeeding}>
                                 <Text style={styles.ghostBtnText}>Close</Text>
                             </TouchableOpacity>
                         </>
-                    ) : step === 'confirmLoad' ? (
+                    ) : (
                         <>
-                            <Text style={styles.title}>Load sample data?</Text>
+                            <Text style={styles.title}>{hasLiveDemoContent ? 'Replace sample data?' : 'Load sample data?'}</Text>
                             <Text style={styles.sub}>
-                                Adds University of Iowa (coach) and Iowa State (followed) with rosters, three finished Hawkeyes vs Cyclones games
-                                (full event history), and future matches on the schedule.
+                                {hasLiveDemoContent
+                                    ? 'Any existing University of Iowa / Iowa State demo teams, games, and schedules from this pack are removed first, then the showcase is created again.'
+                                    : 'Adds University of Iowa (coach) and Iowa State (followed) with rosters, three finished Hawkeyes vs Cyclones games (full event history), and future matches on the schedule.'}
                             </Text>
                             <View style={styles.confirmRow}>
                                 <TouchableOpacity style={styles.ghostBtnFlex} onPress={() => setStep('menu')} disabled={isSeeding}>
@@ -106,29 +96,7 @@ export default function DemoPresentationMenuModal({
                                     {isSeeding ? (
                                         <ActivityIndicator color={colors.onPrimary} />
                                     ) : (
-                                        <Text style={styles.primaryBtnText}>Load</Text>
-                                    )}
-                                </TouchableOpacity>
-                            </View>
-                        </>
-                    ) : (
-                        <>
-                            <Text style={styles.title}>Add another set?</Text>
-                            <Text style={styles.sub}>Creates two additional teams, games, and a scheduled match.</Text>
-                            <View style={styles.confirmRow}>
-                                <TouchableOpacity style={styles.ghostBtnFlex} onPress={() => setStep('menu')} disabled={isSeeding}>
-                                    <Text style={styles.ghostBtnText}>Back</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={[styles.primaryBtnFlex, isSeeding && { opacity: 0.85 }]}
-                                    onPress={onAddAnotherSet}
-                                    disabled={isSeeding}
-                                    activeOpacity={0.85}
-                                >
-                                    {isSeeding ? (
-                                        <ActivityIndicator color={colors.onPrimary} />
-                                    ) : (
-                                        <Text style={styles.primaryBtnText}>Add</Text>
+                                        <Text style={styles.primaryBtnText}>{hasLiveDemoContent ? 'Replace & load' : 'Load'}</Text>
                                     )}
                                 </TouchableOpacity>
                             </View>

@@ -12,6 +12,7 @@ import DemoWalkthroughModal from '../components/DemoWalkthroughModal';
 import TabSceneShell from '../components/TabSceneShell';
 import TactilePressable from '../components/TactilePressable';
 import { DemoModeService } from '../services/DemoModeService';
+import { alertUser, formatErrorMessage } from '../utils/userFeedback';
 import { resolveDemoTourTeamIds } from '../services/demoTourTeamIds';
 import { GameService } from '../services/GameService';
 import { sanitizeAvailability, validateScheduledGameDraft } from '../services/scheduleValidation';
@@ -133,6 +134,14 @@ export default function TeamsHubScreen() {
     const resolvedTourIds = useMemo(
         () => resolveDemoTourTeamIds(demoTourTeams, teamsForDemoResolve),
         [demoTourTeams, teamsForDemoResolve]
+    );
+
+    const hasLiveDemoContent = useMemo(
+        () =>
+            demoPackInstalled ||
+            demoTourTeams !== null ||
+            teamsForDemoResolve.some((t) => t.name === 'University of Iowa' || t.name === 'Iowa State'),
+        [demoPackInstalled, demoTourTeams, teamsForDemoResolve]
     );
 
     const scheduledGames = useMemo(
@@ -508,19 +517,18 @@ export default function TeamsHubScreen() {
         await AsyncStorage.setItem('realultimate.launchGuideSeen.v1', 'true').catch(() => {});
     };
 
-    const runDemoSeed = async (force: boolean): Promise<boolean> => {
+    const runDemoSeed = async (): Promise<boolean> => {
         if (!user) return false;
         setDemoSeeding(true);
         try {
             const name = (user.displayName || user.email?.split('@')[0] || 'Coach').trim();
-            const result = await DemoModeService.seedDemoWorld(user.uid, user.email || '', name, { force });
+            const result = await DemoModeService.seedDemoWorld(user.uid, user.email || '', name);
             setDemoTourTeams({ u: result.universityIowaTeamId, follow: result.iowaStateTeamId });
             setDemoPackInstalled(true);
             setDemoWalkthroughVisible(true);
             return true;
         } catch (e: unknown) {
-            const msg = e instanceof Error ? e.message : typeof e === 'string' ? e : String(e);
-            Alert.alert('Demo unavailable', msg || 'Please try again.');
+            alertUser('Demo unavailable', formatErrorMessage(e) || 'Please try again.');
             return false;
         } finally {
             setDemoSeeding(false);
@@ -1274,15 +1282,11 @@ export default function TeamsHubScreen() {
                     <DemoPresentationMenuModal
                         visible={demoMenuVisible}
                         onClose={() => setDemoMenuVisible(false)}
-                        demoPackInstalled={demoPackInstalled}
+                        hasLiveDemoContent={hasLiveDemoContent}
                         isSeeding={demoSeeding}
                         onOpenTour={() => setDemoWalkthroughVisible(true)}
                         onLoadSampleData={async () => {
-                            const ok = await runDemoSeed(false);
-                            if (ok) setDemoMenuVisible(false);
-                        }}
-                        onAddAnotherSet={async () => {
-                            const ok = await runDemoSeed(true);
+                            const ok = await runDemoSeed();
                             if (ok) setDemoMenuVisible(false);
                         }}
                     />
