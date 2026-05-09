@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RealUltimate — Print Flyer (Letter)</title>
+  <style>
+    :root {
+      --ink: #0f172a;
+      --muted: #475569;
+      --paper: #ffffff;
+      --accent-blue: #1d4ed8;
+      --accent-green: #059669;
+      --accent-glow: linear-gradient(120deg, var(--accent-blue), var(--accent-green));
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #e2e8f0;
+      color: var(--ink);
+      font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+
+    .flyer-wrap {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .flyer {
+      width: 8.5in;
+      height: 11in;
+      max-width: 100%;
+      background: var(--paper);
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      box-shadow: 0 25px 50px rgba(15, 23, 42, 0.12);
+      padding: 0.55in 0.65in 0.5in;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .flyer::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 6px;
+      background: var(--accent-glow);
+      border-radius: 0;
+    }
+
+    .brand-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 0.35in;
+    }
+
+    .brand-mark {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background: linear-gradient(145deg, #eff6ff, #ecfdf5);
+      border: 2px solid var(--accent-blue);
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+    }
+
+    .brand-mark img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .brand-name {
+      font-weight: 800;
+      font-size: 13px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .headline {
+      font-weight: 900;
+      font-size: 38px;
+      line-height: 1.12;
+      text-align: center;
+      letter-spacing: -0.025em;
+      color: var(--ink);
+      margin: 0 0 0.12in;
+      max-width: 6.8in;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .headline-accent {
+      display: block;
+      margin-top: 10px;
+      height: 5px;
+      width: min(3.2in, 40%);
+      margin-left: auto;
+      margin-right: auto;
+      border-radius: 999px;
+      background: var(--accent-glow);
+    }
+
+    .tagline {
+      text-align: center;
+      font-size: 14px;
+      line-height: 1.5;
+      color: var(--muted);
+      font-weight: 600;
+      max-width: 5.5in;
+      margin: 0 auto 0.42in;
+    }
+
+    .qr-zone {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 0;
+      gap: 10px;
+    }
+
+    .qr-frame {
+      width: 3.15in;
+      max-width: 72vmin;
+      padding: 14px;
+      border-radius: 18px;
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      box-shadow: 0 8px 22px rgba(15, 23, 42, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* QR + centered logo (matches marketing site look; static SVG = works offline, no CDN) */
+    .qr-stack {
+      position: relative;
+      display: inline-block;
+      line-height: 0;
+    }
+
+    .qr-svg-host svg {
+      display: block;
+      width: 2.75in;
+      max-width: 100%;
+      height: auto;
+      border-radius: 10px;
+    }
+
+    .qr-logo {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 20%;
+      height: auto;
+      aspect-ratio: 1;
+      object-fit: contain;
+      border-radius: 14%;
+      background: #ffffff;
+      padding: 4px;
+      box-shadow: 0 2px 14px rgba(15, 23, 42, 0.15);
+    }
+
+    .qr-url-line {
+      font-family: ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      text-align: center;
+      max-width: 100%;
+      word-break: break-all;
+      padding: 0 8px;
+    }
+
+    .instructions {
+      margin-top: 0.38in;
+      text-align: center;
+    }
+
+    .instructions h2 {
+      font-weight: 800;
+      font-size: 20px;
+      margin: 0 0 8px;
+      color: var(--ink);
+    }
+
+    .instructions p {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    .instructions .accent-line {
+      margin-top: 14px;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--accent-green);
+      letter-spacing: 0.02em;
+    }
+
+    .footer {
+      margin-top: auto;
+      padding-top: 0.35in;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    @page {
+      size: letter portrait;
+      margin: 0.4in;
+    }
+
+    @media print {
+      html, body {
+        background: #fff;
+      }
+
+      .flyer-wrap {
+        min-height: auto;
+        padding: 0;
+        display: block;
+      }
+
+      .flyer {
+        width: 100%;
+        height: auto;
+        min-height: calc(11in - 0.8in);
+        max-width: none;
+        border: none;
+        border-radius: 0;
+        box-shadow: none;
+        padding: 0.15in 0.2in 0.15in;
+        page-break-after: avoid;
+        page-break-inside: avoid;
+      }
+
+      .flyer::before {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      .headline {
+        font-size: 34px;
+      }
+
+      .qr-frame {
+        max-width: 2.85in;
+        padding: 12px;
+      }
+
+      .no-print {
+        display: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="flyer-wrap">
+    <article class="flyer" aria-label="RealUltimate promotional flyer">
+      <div class="brand-row">
+        <div class="brand-mark" aria-hidden="true">
+          <img
+            src="assets/images/icon256.png"
+            onerror="this.onerror=null;this.src='../assets/images/icon256.png'"
+            alt=""
+            width="40"
+            height="40"
+          />
+        </div>
+        <span class="brand-name">RealUltimate</span>
+      </div>
+
+      <h1 class="headline">
+        Live Scores. Real Stats. RealUltimate.
+        <span class="headline-accent" aria-hidden="true"></span>
+      </h1>
+
+      <p class="tagline">
+        The premium scoring &amp; tournament platform built for Ultimate Frisbee — from pool play to championship point.
+      </p>
+
+      <div class="qr-zone">
+        <div class="qr-frame">
+          <div class="qr-stack">
+            <div class="qr-svg-host" aria-hidden="true">
+              <!-- Static QR encodes APK URL — regenerate: npm run flyer:qr (from web/) -->
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 45 45" shape-rendering="crispEdges"><path fill="#ffffff" d="M0 0h45v45H0z"/><path stroke="#0f172a" d="M2 2.5h7m1 0h1m1 0h1m1 0h3m2 0h1m1 0h1m1 0h2m1 0h2m1 0h1m2 0h2m2 0h7M2 3.5h1m5 0h1m1 0h4m1 0h1m1 0h1m1 0h1m1 0h2m4 0h3m1 0h1m2 0h1m1 0h1m5 0h1M2 4.5h1m1 0h3m1 0h1m5 0h4m1 0h1m3 0h5m2 0h2m2 0h1m1 0h1m1 0h3m1 0h1M2 5.5h1m1 0h3m1 0h1m1 0h1m4 0h1m1 0h7m3 0h3m1 0h1m1 0h2m1 0h1m1 0h3m1 0h1M2 6.5h1m1 0h3m1 0h1m1 0h3m1 0h2m1 0h2m3 0h1m2 0h6m5 0h1m1 0h3m1 0h1M2 7.5h1m5 0h1m1 0h1m1 0h1m2 0h2m4 0h2m1 0h1m1 0h1m1 0h2m2 0h3m1 0h1m5 0h1M2 8.5h7m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h7M13 9.5h2m3 0h3m3 0h1m2 0h3m1 0h1m2 0h1M5 10.5h1m2 0h1m7 0h1m4 0h4m5 0h1m2 0h1m3 0h3m1 0h2M5 11.5h3m3 0h1m3 0h3m1 0h2m3 0h1m3 0h1m1 0h2m2 0h3m2 0h4M2 12.5h1m2 0h1m2 0h1m1 0h1m4 0h1m1 0h4m1 0h3m1 0h2m5 0h1m2 0h1m2 0h2M2 13.5h1m1 0h2m1 0h1m3 0h1m2 0h2m2 0h4m1 0h1m2 0h5m5 0h1m3 0h1M3 14.5h1m1 0h2m1 0h1m1 0h1m1 0h1m2 0h2m1 0h2m6 0h1m1 0h2m1 0h1m1 0h2m1 0h1m2 0h1m1 0h2M2 15.5h1m1 0h1m1 0h2m1 0h1m1 0h1m1 0h2m1 0h1m2 0h1m3 0h1m3 0h1m1 0h2m3 0h3m2 0h1m1 0h1M4 16.5h2m2 0h1m5 0h1m2 0h2m2 0h1m3 0h2m1 0h1m2 0h1m1 0h1m2 0h1m1 0h1m2 0h2M2 17.5h4m1 0h1m1 0h1m1 0h2m1 0h6m2 0h1m1 0h6m1 0h1m2 0h1m1 0h1m2 0h1m1 0h2M6 18.5h1m1 0h8m1 0h2m2 0h5m5 0h1m5 0h1m1 0h1m1 0h2M2 19.5h1m2 0h3m1 0h1m1 0h1m3 0h5m3 0h1m6 0h3m3 0h2m3 0h2M2 20.5h1m3 0h1m1 0h3m1 0h2m3 0h3m1 0h2m1 0h1m1 0h3m2 0h1m2 0h1m1 0h1m1 0h5M7 21.5h1m4 0h2m1 0h1m1 0h2m3 0h2m3 0h1m1 0h1m4 0h1m1 0h2m1 0h1m2 0h1M4 22.5h5m1 0h2m2 0h2m1 0h3m1 0h1m1 0h2m1 0h4m1 0h1m1 0h1m1 0h3m2 0h1m1 0h1M3 23.5h2m1 0h2m1 0h1m3 0h2m1 0h1m4 0h1m1 0h2m3 0h1m1 0h1m3 0h3m3 0h3M3 24.5h1m1 0h1m2 0h1m1 0h1m1 0h3m3 0h1m6 0h2m3 0h2m1 0h1m1 0h1m2 0h2m1 0h1M5 25.5h2m6 0h5m1 0h4m2 0h1m3 0h1m2 0h2m6 0h1M2 26.5h2m2 0h1m1 0h1m1 0h2m3 0h2m3 0h3m1 0h1m1 0h2m2 0h2m2 0h4m4 0h1M2 27.5h2m1 0h1m3 0h1m1 0h5m2 0h1m1 0h1m2 0h1m1 0h1m6 0h2m1 0h1m3 0h1m1 0h1M4 28.5h5m2 0h3m1 0h1m1 0h1m2 0h1m1 0h1m4 0h2m1 0h3m1 0h2m5 0h2M2 29.5h3m1 0h1m2 0h1m1 0h2m2 0h1m1 0h1m1 0h1m3 0h1m1 0h1m2 0h1m1 0h3m1 0h3m1 0h1m2 0h1M2 30.5h9m1 0h2m2 0h1m1 0h1m1 0h1m1 0h5m1 0h2m1 0h1m3 0h2m4 0h1M3 31.5h1m9 0h1m2 0h3m1 0h2m1 0h1m4 0h3m2 0h3m1 0h1m3 0h2M2 32.5h1m1 0h6m1 0h2m1 0h2m4 0h1m1 0h1m3 0h2m1 0h2m11 0h1M6 33.5h1m2 0h1m1 0h1m1 0h1m1 0h3m2 0h7m1 0h1m2 0h1m3 0h1m1 0h1m1 0h1m2 0h1M2 34.5h1m1 0h1m3 0h4m1 0h1m1 0h7m1 0h1m4 0h3m3 0h9M10 35.5h2m2 0h1m2 0h1m1 0h3m2 0h2m1 0h2m1 0h2m1 0h2m3 0h1m2 0h2M2 36.5h7m4 0h1m1 0h1m1 0h1m5 0h5m2 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h2M2 37.5h1m5 0h1m2 0h1m2 0h6m2 0h3m2 0h1m1 0h1m2 0h1m1 0h1m3 0h3m1 0h1M2 38.5h1m1 0h3m1 0h1m2 0h1m5 0h2m4 0h1m2 0h1m1 0h3m1 0h1m1 0h5m2 0h1M2 39.5h1m1 0h3m1 0h1m1 0h1m1 0h1m3 0h3m1 0h2m3 0h2m4 0h3m1 0h2m1 0h1M2 40.5h1m1 0h3m1 0h1m3 0h1m1 0h1m2 0h1m1 0h1m2 0h2m2 0h1m1 0h1m9 0h2m2 0h1M2 41.5h1m5 0h1m2 0h1m1 0h3m1 0h1m1 0h2m1 0h1m1 0h2m3 0h4m1 0h1m1 0h2m3 0h1M2 42.5h7m2 0h2m3 0h1m1 0h1m1 0h1m1 0h1m3 0h2m1 0h1m1 0h1m2 0h1m2 0h2m2 0h1"/></svg>
+            </div>
+            <img
+              class="qr-logo"
+              src="assets/images/icon256.png"
+              onerror="this.onerror=null;this.src='../assets/images/icon256.png'"
+              alt=""
+              width="64"
+              height="64"
+            />
+          </div>
+        </div>
+        <small class="qr-url-line">https://download.realultimate.me/realultimate.apk</small>
+      </div>
+
+      <div class="instructions">
+        <h2>Scan to download the Android app</h2>
+        <p>Keep up with the game in real-time.</p>
+        <p class="accent-line">Android · Free · For coaches, players &amp; fans</p>
+      </div>
+
+      <div class="footer">realultimate.me</div>
+    </article>
+  </div>
+
+  <p class="no-print" style="text-align:center;padding:16px;font-size:13px;color:#64748b;max-width:520px;margin:0 auto;line-height:1.5;">
+    <strong>No internet required</strong> — the QR is embedded in this file.<br />
+    Open this HTML from your project folder so the app icon loads (<code>assets/images/icon256.png</code>). Then <strong>Ctrl+P</strong> → Letter → Print.<br />
+    To change the link: run <code>npm run flyer:qr</code> in <code>web/</code>, then copy the new SVG from <code>assets/flyer/qr-download.svg</code> into this file (replace the <code>&lt;svg&gt;</code> block).
+  </p>
+</body>
+</html>

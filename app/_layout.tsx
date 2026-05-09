@@ -59,6 +59,11 @@ function useProtectedRoutes() {
         root === "index" ||
         root === "forgot-password" ||
         root === "demo" ||
+        root === "marketing-showcase" ||
+        root === "showcase-recorder" ||
+        root === "showcase-spectate" ||
+        root === "showcase-team" ||
+        root === "showcase-tournament" ||
         root === "legal" ||
         (root === "game" && s[1] === "join-observer");
 
@@ -116,6 +121,11 @@ export default function RootLayout() {
           <Stack screenOptions={{ contentStyle: { backgroundColor: "transparent" } }}>
             <Stack.Screen name="index" options={{ headerShown: false }} />
             <Stack.Screen name="demo" options={{ headerShown: false }} />
+            <Stack.Screen name="marketing-showcase" options={{ headerShown: false }} />
+            <Stack.Screen name="showcase-recorder" options={{ headerShown: false }} />
+            <Stack.Screen name="showcase-spectate" options={{ headerShown: false }} />
+            <Stack.Screen name="showcase-team" options={{ headerShown: false }} />
+            <Stack.Screen name="showcase-tournament" options={{ headerShown: false }} />
             <Stack.Screen name="forgot-password" options={{ headerShown: false }} />
             <Stack.Screen name="legal/privacy" options={{ headerShown: false }} />
             <Stack.Screen name="legal/terms" options={{ headerShown: false }} />
